@@ -1,0 +1,2 @@
+/* Removed local tailwind override to ensure CDN config matches the exact request perfectly */
+body { margin: 0; padding: 0; }
