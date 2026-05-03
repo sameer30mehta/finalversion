@@ -41,6 +41,12 @@ The system keeps all numeric scoring deterministic. The local LLM explains alrea
 - Ollama underwriter summary and evidence recommendations
 - Deterministic scoring with an audit-safe LLM boundary
 
+## Product Screenshots
+
+### Hyperlocal Map Intelligence
+
+![PropScore hyperlocal map intelligence dashboard](docs/screenshots/hyperlocal-map-intelligence.png)
+
 ## Architecture Overview
 
 - **Frontend:** React + Vite lender dashboard for intake, verification, valuation, historical cases, portfolio risk, and AI briefing.
