@@ -4,6 +4,7 @@ import {
   extractHyperlocalContext,
   resolveLocation
 } from './locationIntelligence';
+import { resolveStage1ContextFromBackend } from './api';
 
 export const UNIT_CONVERSIONS = {
   sqft: { toSqft: 1, label: 'Sq.Ft' },
@@ -155,6 +156,20 @@ function getInputCoordinates(input) {
   return isValidCoordinatePair(lat, lon) ? [roundCoordinate(lat), roundCoordinate(lon)] : null;
 }
 
+function normalizeDbPropertyType(propertyType) {
+  const key = normalizeKey(propertyType);
+  if (['apartment', 'villa', 'residential', 'flat', 'house'].includes(key)) return 'Residential';
+  if (['commercial', 'office', 'shop', 'showroom', 'warehouse'].includes(key)) return 'Commercial';
+  return propertyType || 'Residential';
+}
+
+function normalizeDbSubtype(rawIntake, taxonomy) {
+  const config = String(rawIntake.config || '').trim();
+  const compactConfig = config.toUpperCase().replace(/\s+/g, '');
+  if (['1BHK', '2BHK', '3BHK'].includes(compactConfig)) return compactConfig;
+  return taxonomy.propertySubtype === 'Unspecified' ? null : taxonomy.propertySubtype;
+}
+
 export function normalizeSizeToSqft(rawSize, rawUnit = 'sqft') {
   const size = parseNumber(rawSize);
   const unit = normalizeKey(rawUnit) || 'sqft';
@@ -280,6 +295,60 @@ async function resolveHyperlocalContext(lat, lon) {
   }
 }
 
+async function resolveSqliteStage1Context(location, rawIntake, taxonomy) {
+  const sqliteContext = await resolveStage1ContextFromBackend({
+    lat: location.lat,
+    lon: location.lon,
+    propertyType: normalizeDbPropertyType(taxonomy.propertyType),
+    subtype: normalizeDbSubtype(rawIntake, taxonomy)
+  });
+
+  return sqliteContext?.bucketAssignment ? sqliteContext : null;
+}
+
+function demandTierToLegacyDemand(demandTier) {
+  const key = normalizeKey(demandTier);
+  if (key === 'prime') return 'very_high';
+  if (key === 'high') return 'high';
+  if (key === 'medium-high') return 'high';
+  if (key === 'medium') return 'moderate';
+  return 'moderate';
+}
+
+function buildSqliteLocationIntelligence(sqliteContext) {
+  const locality = sqliteContext.locality || {};
+  const marketNorms = sqliteContext.marketNorms || {};
+  const circleRate = sqliteContext.circleRate || {};
+  const coarseBucket = sqliteContext.bucketAssignment?.coarseBucket || {};
+
+  return {
+    coarseBucket: {
+      zoneId: locality.coarseZoneId || coarseBucket.id,
+      circleRate: circleRate.ratePerSqft || coarseBucket.circleRate || null,
+      landUseType: locality.broadLandUse || coarseBucket.broadLandUse || 'Residential',
+      adminRegion: locality.regulatoryRegion || coarseBucket.regulatoryRegion || 'Mumbai',
+      source: 'sqlite_reference_database'
+    },
+    microMarket: {
+      bucketId: locality.microMarketId,
+      norms: {
+        sizeP5: marketNorms.sizeP5,
+        sizeP50: marketNorms.sizeP50,
+        sizeP95: marketNorms.sizeP95,
+        dominantSubtype: marketNorms.subtypePrevalence,
+        avgPricePerSqft: marketNorms.pricePsfP50,
+        medianRentalYield: null
+      },
+      demand: demandTierToLegacyDemand(locality.demandTier),
+      comparableCount: marketNorms.comparableCount,
+      dataFreshnessDays: 0,
+      localityName: locality.localityName,
+      liquidityIndex: marketNorms.liquidityIndex,
+      source: 'sqlite_reference_database'
+    }
+  };
+}
+
 function buildBucketAssignment(coarseBucket, microMarket, hyperlocalContext, lat, lon) {
   const summary = hyperlocalContext.summary || {};
   const norms = microMarket.norms || {};
@@ -359,11 +428,18 @@ export async function buildStage1Output(input = {}) {
   const age = deriveAgeBucket(rawIntake.age);
   const completenessStatus = computeCompletenessStatus(rawIntake, { taxonomy, size, age });
   const cityTier = input.cityTier || 1;
+  const sqliteContext = await resolveSqliteStage1Context(location, rawIntake, taxonomy);
 
-  const coarseBucketRaw = assignCoarseBucket(location.lat, location.lon, cityTier);
-  const microMarketRaw = assignMicroMarketBucket(location.lat, location.lon);
+  const sqliteLocationIntelligence = sqliteContext
+    ? buildSqliteLocationIntelligence(sqliteContext)
+    : null;
+  const coarseBucketRaw = sqliteLocationIntelligence?.coarseBucket
+    || assignCoarseBucket(location.lat, location.lon, cityTier);
+  const microMarketRaw = sqliteLocationIntelligence?.microMarket
+    || assignMicroMarketBucket(location.lat, location.lon);
   const hyperlocalRaw = await resolveHyperlocalContext(location.lat, location.lon);
-  const bucketAssignment = buildBucketAssignment(coarseBucketRaw, microMarketRaw, hyperlocalRaw, location.lat, location.lon);
+  const bucketAssignment = sqliteContext?.bucketAssignment
+    || buildBucketAssignment(coarseBucketRaw, microMarketRaw, hyperlocalRaw, location.lat, location.lon);
 
   const normalizedPropertyProfile = {
     address: location.address,
@@ -390,6 +466,8 @@ export async function buildStage1Output(input = {}) {
     normalizedPropertyProfile,
     bucketAssignment,
     rawIntake,
+    marketNorms: sqliteContext?.marketNorms || null,
+    circleRate: sqliteContext?.circleRate || null,
     locationIntelligence: {
       coarseBucket: coarseBucketRaw,
       microMarket: microMarketRaw,
@@ -398,6 +476,10 @@ export async function buildStage1Output(input = {}) {
     stage1Metadata: {
       version: 'stage1.v1',
       completenessScore: completedFieldCount / 5,
+      contextSource: sqliteContext ? 'sqlite' : 'fallback',
+      contextSourceLabel: sqliteContext ? 'SQLite reference database' : 'Fallback generated context',
+      locationMatchConfidence: sqliteContext?.matchConfidence || 'fallback',
+      locationMatchDistanceKm: sqliteContext?.distanceKm ?? null,
       generatedAt: new Date().toISOString()
     }
   };

@@ -51,6 +51,59 @@ function formatINR(value) {
   return `INR ${Math.round(value).toLocaleString('en-IN')}/sqft`;
 }
 
+function formatNumber(value, digits = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric.toLocaleString('en-IN', {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits
+  });
+}
+
+function formatSizeBand(sizeP5, sizeP95) {
+  const low = formatNumber(sizeP5);
+  const high = formatNumber(sizeP95);
+  return low && high ? `${low}-${high} sqft` : 'Not resolved';
+}
+
+function formatPriceBand(priceP25, priceP75) {
+  const low = formatNumber(priceP25);
+  const high = formatNumber(priceP75);
+  return low && high ? `INR ${low}-${high} / sqft` : 'Not resolved';
+}
+
+function formatPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'Not resolved';
+  return `${(numeric * 100).toFixed(1)}%`;
+}
+
+function normSourceLabel(source) {
+  if (source === 'sqlite_market_norms') return 'SQLite market_norms';
+  if (source === 'generated_fallback') return 'generated fallback';
+  return 'default fallback';
+}
+
+function locationConfidenceFactor(confidence) {
+  if (confidence === 'high') return 1.0;
+  if (confidence === 'medium') return 0.8;
+  if (confidence === 'low') return 0.55;
+  return 0.6;
+}
+
+function liquidityLabel(liquidityIndex) {
+  const value = Number(liquidityIndex);
+  if (!Number.isFinite(value)) return 'Unknown liquidity support';
+  if (value >= 0.70) return 'High liquidity support in this bucket';
+  if (value >= 0.45) return 'Medium liquidity support in this bucket';
+  return 'Weak liquidity support in this bucket';
+}
+
+function normValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function isValidCoordinatePair(lat, lon) {
   return Number.isFinite(lat) && Number.isFinite(lon)
     && lat >= -90 && lat <= 90
@@ -72,6 +125,99 @@ function getProfile(property, context) {
       mandatoryComplete: true,
       missingFields: []
     }
+  };
+}
+
+function buildDefaultNormContext(property) {
+  const area = Number(property.area);
+  const safeArea = Number.isFinite(area) && area > 0 ? area : 900;
+
+  return {
+    source: 'default_fallback',
+    sourceLabel: normSourceLabel('default_fallback'),
+    sizeP5: Math.round(safeArea * 0.75),
+    sizeP50: Math.round(safeArea),
+    sizeP95: Math.round(safeArea * 1.35),
+    pricePsfP25: null,
+    pricePsfP50: null,
+    pricePsfP75: null,
+    subtypePrevalence: null,
+    comparableCount: 0,
+    liquidityIndex: 0.5,
+    locationMatchConfidence: 'fallback'
+  };
+}
+
+function resolveNormContext(context, microMarket, property) {
+  const stage1 = context.stage1 || {};
+  const sqliteNorms = stage1.marketNorms || {};
+  const hasSqliteNorms = stage1.stage1Metadata?.contextSource === 'sqlite'
+    && Number.isFinite(Number(sqliteNorms.sizeP5))
+    && Number.isFinite(Number(sqliteNorms.sizeP95));
+
+  if (hasSqliteNorms) {
+    return {
+      source: 'sqlite_market_norms',
+      sourceLabel: normSourceLabel('sqlite_market_norms'),
+      sizeP5: normValue(sqliteNorms.sizeP5),
+      sizeP50: normValue(sqliteNorms.sizeP50),
+      sizeP95: normValue(sqliteNorms.sizeP95),
+      pricePsfP25: normValue(sqliteNorms.pricePsfP25),
+      pricePsfP50: normValue(sqliteNorms.pricePsfP50),
+      pricePsfP75: normValue(sqliteNorms.pricePsfP75),
+      subtypePrevalence: normValue(sqliteNorms.subtypePrevalence),
+      comparableCount: normValue(sqliteNorms.comparableCount) || 0,
+      liquidityIndex: normValue(sqliteNorms.liquidityIndex),
+      locationMatchConfidence: stage1.stage1Metadata?.locationMatchConfidence || 'fallback'
+    };
+  }
+
+  const generatedNorms = microMarket?.norms || {};
+  const hasGeneratedNorms = Number.isFinite(Number(generatedNorms.sizeP5))
+    && Number.isFinite(Number(generatedNorms.sizeP95));
+
+  if (hasGeneratedNorms) {
+    const avgPrice = normValue(generatedNorms.avgPricePerSqft);
+    const demandLiquidity = {
+      very_high: 0.82,
+      high: 0.74,
+      moderate: 0.58,
+      low: 0.38
+    }[microMarket?.demand] ?? 0.55;
+
+    return {
+      source: 'generated_fallback',
+      sourceLabel: normSourceLabel('generated_fallback'),
+      sizeP5: normValue(generatedNorms.sizeP5),
+      sizeP50: normValue(generatedNorms.sizeP50),
+      sizeP95: normValue(generatedNorms.sizeP95),
+      pricePsfP25: avgPrice ? avgPrice * 0.9 : null,
+      pricePsfP50: avgPrice,
+      pricePsfP75: avgPrice ? avgPrice * 1.1 : null,
+      subtypePrevalence: null,
+      comparableCount: Number(microMarket?.comparableCount || 0),
+      liquidityIndex: demandLiquidity,
+      locationMatchConfidence: 'fallback'
+    };
+  }
+
+  return buildDefaultNormContext(property);
+}
+
+function applyNormContextToMicroMarket(microMarket, normContext) {
+  return {
+    ...(microMarket || {}),
+    comparableCount: normContext.comparableCount,
+    norms: {
+      ...(microMarket?.norms || {}),
+      sizeP5: normContext.sizeP5,
+      sizeP50: normContext.sizeP50,
+      sizeP95: normContext.sizeP95,
+      avgPricePerSqft: normContext.pricePsfP50,
+      subtypePrevalence: normContext.subtypePrevalence,
+      liquidityIndex: normContext.liquidityIndex
+    },
+    normSource: normContext.source
   };
 }
 
@@ -117,9 +263,47 @@ function getNormBands(norms = {}) {
   };
 }
 
-function getSubtypePrevalence(property, microMarket) {
-  const dominant = microMarket?.norms?.dominantSubtype || 'Not resolved';
+function getSubtypePrevalence(property, microMarket, normContext = {}) {
+  const numericPrevalence = Number(normContext.subtypePrevalence);
   const declared = property.config || property.subtype || 'Not resolved';
+
+  if (Number.isFinite(numericPrevalence)) {
+    if (numericPrevalence >= 0.20) {
+      return {
+        level: 'High',
+        label: `Common here; seen in ${formatPercent(numericPrevalence)} of similar local cases`,
+        isRare: false,
+        isUncommon: false,
+        declared,
+        dominant: 'similar local cases',
+        prevalence: numericPrevalence
+      };
+    }
+
+    if (numericPrevalence >= 0.08) {
+      return {
+        level: 'Moderate',
+        label: `Uncommon here; seen in ${formatPercent(numericPrevalence)} of similar local cases`,
+        isRare: false,
+        isUncommon: true,
+        declared,
+        dominant: 'similar local cases',
+        prevalence: numericPrevalence
+      };
+    }
+
+    return {
+      level: 'Low',
+      label: `Rare here; seen in only ${formatPercent(numericPrevalence)} of similar local cases`,
+      isRare: true,
+      isUncommon: true,
+      declared,
+      dominant: 'similar local cases',
+      prevalence: numericPrevalence
+    };
+  }
+
+  const dominant = microMarket?.norms?.dominantSubtype || 'Not resolved';
   const commonConfigs = ['1 BHK', '2 BHK', '3 BHK'];
 
   if (declared === dominant) {
@@ -176,20 +360,25 @@ function isPremiumProfile(profile, property, bands) {
     || Number(property.area) > bands.p90;
 }
 
-function buildLocalReferenceContext(property, microMarket, coarseBucket, dataSufficiencyScore) {
+function buildLocalReferenceContext(property, microMarket, coarseBucket, dataSufficiencyScore, normContext) {
   const norms = microMarket?.norms || {};
   const bands = getNormBands(norms);
-  const prevalence = getSubtypePrevalence(property, microMarket);
-  const avgPrice = Number(norms.avgPricePerSqft);
-  const priceBand = Number.isFinite(avgPrice)
-    ? `${formatINR(avgPrice * 0.9)} - ${formatINR(avgPrice * 1.1)}`
-    : 'Not resolved';
+  const prevalence = getSubtypePrevalence(property, microMarket, normContext);
+  const priceBand = formatPriceBand(normContext.pricePsfP25, normContext.pricePsfP75);
+  const sizeBand = formatSizeBand(normContext.sizeP5, normContext.sizeP95);
 
   return {
+    sizeBand,
+    priceBand,
+    subtypePrevalence: normContext.subtypePrevalence,
+    comparableCount: normContext.comparableCount,
+    liquidityIndex: normContext.liquidityIndex,
+    source: normContext.source,
+    sourceLabel: normContext.sourceLabel,
     sizePercentileBand: `P5 ${bands.p5} sqft | P50 ${bands.p50} sqft | P95 ${bands.p95} sqft`,
-    subtypePrevalence: prevalence.label,
+    subtypePrevalenceLabel: prevalence.label,
     localPriceBand: priceBand,
-    localLiquidityIndex: `${titleCase(microMarket?.demand || 'unknown')} demand, ${microMarket?.comparableCount || 0} comparables`,
+    localLiquidityIndex: `${normContext.comparableCount || 0} comparables, liquidity ${Number.isFinite(Number(normContext.liquidityIndex)) ? Number(normContext.liquidityIndex).toFixed(2) : 'not resolved'}`,
     dataSufficiencyScore,
     circleRateSource: coarseBucket?.source || 'unknown'
   };
@@ -307,50 +496,63 @@ function runLocationValidation(profile, coarseBucket, hyperlocalContext) {
   return flags;
 }
 
-export function compareLocalNorms(property, microMarket) {
+export function compareLocalNorms(property, microMarket, normContext = {}) {
   const flags = [];
   const norms = microMarket?.norms || {};
   const bands = getNormBands(norms);
   const area = Number(property.area);
-  const prevalence = getSubtypePrevalence(property, microMarket);
+  const prevalence = getSubtypePrevalence(property, microMarket, normContext);
+  const hasSizeBand = bands.p5 > 0 && bands.p95 > 0;
 
-  if (area > bands.p97) {
+  if (hasSizeBand && area > bands.p95 * 1.4) {
     flags.push(createFlag({
-      id: 'SIZE_ABOVE_P97',
-      title: 'Strong Size Outlier',
+      id: 'SIZE_FAR_ABOVE_LOCAL_RANGE',
+      title: 'Severe Size Outlier',
       severity: 'review',
       sourceBucket: 'micro-market',
       checkGroup: 'localNorms',
-      explanation: 'The property is much larger than similar properties nearby.',
-      evidence: `${area} sqft is far above the usual local range`,
-      anomalyPoints: 32,
+      explanation: 'The property is far larger than similar properties in this micro-market.',
+      evidence: `${area} sqft vs usual ${formatSizeBand(bands.p5, bands.p95)}`,
+      anomalyPoints: 36,
       suspicionPoints: 12
     }));
-  } else if (area > bands.p90) {
+  } else if (hasSizeBand && area > bands.p95) {
     flags.push(createFlag({
-      id: 'SIZE_ABOVE_P90',
-      title: 'Mild Size Outlier',
+      id: 'SIZE_ABOVE_LOCAL_RANGE',
+      title: 'Size Above Local Range',
       severity: 'warning',
       sourceBucket: 'micro-market',
       checkGroup: 'localNorms',
-      explanation: 'The property is larger than most similar properties nearby.',
-      evidence: `${area} sqft is above the usual local range`,
-      anomalyPoints: 14,
+      explanation: 'The property is larger than the usual range for similar properties nearby.',
+      evidence: `${area} sqft vs usual ${formatSizeBand(bands.p5, bands.p95)}`,
+      anomalyPoints: 16,
       suspicionPoints: 4
     }));
   }
 
-  if (bands.p5 > 0 && area < bands.p5) {
+  if (hasSizeBand && area < bands.p5 * 0.6) {
     flags.push(createFlag({
-      id: 'SIZE_BELOW_P5',
-      title: 'Below Local Size Floor',
+      id: 'SIZE_FAR_BELOW_LOCAL_RANGE',
+      title: 'Severe Size Outlier',
       severity: 'review',
       sourceBucket: 'micro-market',
       checkGroup: 'localNorms',
-      explanation: 'The property is much smaller than similar properties nearby.',
-      evidence: `${area} sqft is below the usual local range`,
-      anomalyPoints: 28,
+      explanation: 'The property is far smaller than similar properties in this micro-market.',
+      evidence: `${area} sqft vs usual ${formatSizeBand(bands.p5, bands.p95)}`,
+      anomalyPoints: 34,
       suspicionPoints: 10
+    }));
+  } else if (hasSizeBand && area < bands.p5) {
+    flags.push(createFlag({
+      id: 'SIZE_BELOW_LOCAL_RANGE',
+      title: 'Size Below Local Range',
+      severity: 'warning',
+      sourceBucket: 'micro-market',
+      checkGroup: 'localNorms',
+      explanation: 'The property is smaller than the usual range for similar properties nearby.',
+      evidence: `${area} sqft vs usual ${formatSizeBand(bands.p5, bands.p95)}`,
+      anomalyPoints: 15,
+      suspicionPoints: 4
     }));
   }
 
@@ -363,8 +565,35 @@ export function compareLocalNorms(property, microMarket) {
       checkGroup: 'localNorms',
       explanation: 'The declared subtype or configuration is uncommon in this micro-market.',
       evidence: prevalence.label,
-      anomalyPoints: 14,
-      suspicionPoints: 6
+      anomalyPoints: 18,
+      suspicionPoints: 8
+    }));
+  } else if (prevalence.isUncommon) {
+    flags.push(createFlag({
+      id: 'UNCOMMON_SUBTYPE_OR_CONFIGURATION',
+      title: 'Uncommon Local Subtype',
+      severity: 'warning',
+      sourceBucket: 'micro-market',
+      checkGroup: 'localNorms',
+      explanation: 'The selected subtype appears less often in this micro-market.',
+      evidence: prevalence.label,
+      anomalyPoints: 8,
+      suspicionPoints: 2
+    }));
+  }
+
+  const liquidityIndex = Number(normContext.liquidityIndex);
+  if (Number.isFinite(liquidityIndex) && liquidityIndex < 0.45) {
+    flags.push(createFlag({
+      id: 'WEAK_LOCAL_LIQUIDITY',
+      title: 'Weak Local Liquidity',
+      severity: 'penalty',
+      sourceBucket: 'micro-market',
+      checkGroup: 'localNorms',
+      explanation: 'The local liquidity index is weak, so resale support may be thinner.',
+      evidence: `Liquidity index ${liquidityIndex.toFixed(2)}`,
+      anomalyPoints: 10,
+      suspicionPoints: 4
     }));
   }
 
@@ -467,7 +696,7 @@ export function detectContextMismatch(property, coarseBucket, hyperlocalContext,
   return flags;
 }
 
-function runCrossSignalChecks({ baseFlags, property, profile, coarseBucket, microMarket, hyperlocalContext, dataSufficiencyScore }) {
+function runCrossSignalChecks({ baseFlags, property, profile, coarseBucket, microMarket, hyperlocalContext, dataSufficiencyScore, normContext }) {
   const flags = [];
   const flagIds = new Set(baseFlags.map((flag) => flag.id));
   const reviewOrPenaltyFlags = baseFlags.filter((flag) => flag.severity === 'review' || flag.severity === 'penalty');
@@ -476,7 +705,7 @@ function runCrossSignalChecks({ baseFlags, property, profile, coarseBucket, micr
   const accessQuality = getAccessQuality(hyperlocalContext?.summary);
   const coarseSupports = coarseBucketSupportsAsset(property.type, coarseBucket?.landUseType);
 
-  if ((flagIds.has('SIZE_ABOVE_P97') || flagIds.has('SIZE_BELOW_P5')) && flagIds.has('RARE_SUBTYPE_OR_CONFIGURATION')) {
+  if ((flagIds.has('SIZE_FAR_ABOVE_LOCAL_RANGE') || flagIds.has('SIZE_FAR_BELOW_LOCAL_RANGE')) && flagIds.has('RARE_SUBTYPE_OR_CONFIGURATION')) {
     flags.push(createFlag({
       id: 'SIZE_OUTLIER_RARE_SUBTYPE',
       title: 'Size Outlier Combined With Rare Subtype',
@@ -544,6 +773,23 @@ function runCrossSignalChecks({ baseFlags, property, profile, coarseBucket, micr
     }));
   }
 
+  if (
+    normContext?.locationMatchConfidence === 'low'
+    && reviewOrPenaltyFlags.some((flag) => flag.checkGroup === 'localNorms')
+  ) {
+    flags.push(createFlag({
+      id: 'LOW_LOCATION_CONFIDENCE_WITH_ANOMALY',
+      title: 'Low Location Match With Local Anomaly',
+      severity: 'penalty',
+      sourceBucket: 'system',
+      checkGroup: 'crossSignal',
+      explanation: 'The locality match is low confidence and the case also has a local norm concern.',
+      evidence: 'Low location confidence + local anomaly',
+      anomalyPoints: 0,
+      suspicionPoints: 12
+    }));
+  }
+
   if (flagIds.has('RARE_SUBTYPE_OR_CONFIGURATION') && coarseSupports) {
     flags.push(createFlag({
       id: 'COARSE_SUPPORTS_RARE_PROFILE',
@@ -562,7 +808,18 @@ function runCrossSignalChecks({ baseFlags, property, profile, coarseBucket, micr
   return flags;
 }
 
-export function calculateDataSufficiency(microMarket, coarseBucket, hasImages, hasLegal) {
+export function calculateDataSufficiency(microMarket, coarseBucket, hasImages, hasLegal, normContext = null) {
+  if (normContext?.source === 'sqlite_market_norms') {
+    const comparableFactor = Math.min(1, Number(normContext.comparableCount || 0) / 50);
+    const liquidityFactor = clamp(Number(normContext.liquidityIndex || 0), 0, 1);
+    const locationFactor = locationConfidenceFactor(normContext.locationMatchConfidence);
+    return Number(((0.5 * comparableFactor) + (0.3 * liquidityFactor) + (0.2 * locationFactor)).toFixed(2));
+  }
+
+  if (normContext?.source === 'default_fallback') {
+    return 0.4;
+  }
+
   let score = 0;
 
   if (microMarket?.comparableCount >= 50) score += 0.30;
@@ -676,110 +933,131 @@ function buildEvaluationRows({
   coarseBucket,
   hyperlocalContext,
   localReferenceContext,
-  scores
+  scores,
+  normContext
 }) {
   const norms = microMarket?.norms || {};
   const bands = getNormBands(norms);
   const summary = hyperlocalContext?.summary || {};
-  const prevalence = getSubtypePrevalence(property, microMarket);
+  const prevalence = getSubtypePrevalence(property, microMarket, normContext);
   const byGroup = (group) => flags.filter((flag) => flag.checkGroup === group && !flag.protective);
   const firstFlag = (ids) => flags.find((flag) => ids.includes(flag.id) && !flag.protective);
   const checkStatus = (id) => checksRun.find((check) => check.id === id)?.status || 'pass';
 
-  const sizeFlag = firstFlag(['SIZE_ABOVE_P97', 'SIZE_ABOVE_P90', 'SIZE_BELOW_P5']);
-  const subtypeFlag = firstFlag(['RARE_SUBTYPE_OR_CONFIGURATION']);
+  const sizeFlag = firstFlag([
+    'SIZE_FAR_ABOVE_LOCAL_RANGE',
+    'SIZE_ABOVE_LOCAL_RANGE',
+    'SIZE_FAR_BELOW_LOCAL_RANGE',
+    'SIZE_BELOW_LOCAL_RANGE'
+  ]);
+  const subtypeFlag = firstFlag(['RARE_SUBTYPE_OR_CONFIGURATION', 'UNCOMMON_SUBTYPE_OR_CONFIGURATION']);
   const contextFlags = byGroup('context');
   const crossSignalFlags = byGroup('crossSignal');
   const locationFlags = byGroup('location');
 
-  const sizeReference = sizeFlag?.id === 'SIZE_BELOW_P5'
-    ? 'Much smaller than similar homes here'
-    : sizeFlag?.id === 'SIZE_ABOVE_P97'
-      ? 'Much larger than similar homes here'
-      : sizeFlag?.id === 'SIZE_ABOVE_P90'
-        ? 'Larger than most similar homes here'
-        : 'Similar size to nearby properties';
-
   const accessQuality = getAccessQuality(summary);
   const contextStatus = resultForFlags(contextFlags, 'pass');
   const crossSignalStatus = resultForFlags(crossSignalFlags, 'pass');
+  const liquidityIndex = Number(normContext.liquidityIndex);
+  const comparableCount = Number(normContext.comparableCount || 0);
+  const sourceText = `Norm source: ${normContext.sourceLabel}`;
+  const sizeBand = localReferenceContext.sizeBand || formatSizeBand(bands.p5, bands.p95);
+  const sizeDecision = sizeFlag?.severity || 'pass';
+  const subtypeDecision = subtypeFlag?.severity || 'pass';
+  const dataDecision = scores.dataSufficiencyScore < 0.45 ? 'penalty' : scores.dataSufficiencyScore < 0.6 ? 'warning' : 'pass';
+  const liquidityDecision = Number.isFinite(liquidityIndex) && liquidityIndex < 0.45 ? 'penalty' : 'pass';
+  const dataReference = comparableCount >= 50
+    ? 'Enough nearby evidence for reliable screening'
+    : comparableCount >= 20
+      ? 'Some nearby evidence is available'
+      : 'Nearby evidence is limited';
+  const sizeReference = sizeFlag
+    ? `Usually ${sizeBand} in this micro-market`
+    : `Usually ${sizeBand} in this micro-market`;
+  const subtypeReference = Number.isFinite(Number(prevalence.prevalence))
+    ? prevalence.label
+    : (subtypeFlag ? 'This subtype is less common here' : 'This subtype is common enough here');
 
   const usualSizeText = bands.p5 > 0
-    ? `similar properties here are usually around ${bands.p5} to ${bands.p95} sqft`
+    ? `similar properties are usually between ${formatNumber(bands.p5)} and ${formatNumber(bands.p95)} sqft`
     : 'nearby size norms are limited';
-  const sourceBucketText = (value) => `Source: ${value}`;
+  const sourceBucketText = (value) => value;
   return [
     {
       id: 'completeness',
       check: 'Completeness',
       observedValue: profile.completenessStatus?.mandatoryComplete === false ? 'Mandatory fields missing' : 'Mandatory fields present',
       reference: 'All required details should be present',
-      sourceBucket: 'System',
+      sourceBucket: 'Source: Stage 1 intake',
       result: checkStatus('completeness'),
       detail: profile.completenessStatus?.missingFields?.length
         ? `Some required details are missing: ${profile.completenessStatus.missingFields.join(', ')}. The system needs these before it can trust the case.`
         : 'Your property has the required location, property type, subtype, size, and age details. That gives the system enough basic information to continue.'
     },
     {
-      id: 'format_validity',
-      check: 'Basic details',
-      observedValue: `Coordinates, age ${profile.ageYears} years, size ${profile.standardizedSizeSqft} sqft`,
-      reference: 'The details look usable',
-      sourceBucket: 'System',
-      result: checkStatus('format_validity'),
-      detail: `The location, age, size, and property category are in a usable format. This matters because valuation should not run on impossible or unsupported inputs.`
-    },
-    {
       id: 'location_validation',
       check: 'Location validation',
       observedValue: locationFlags.length ? 'Resolution issue detected' : 'Resolved successfully',
       reference: 'The location can be placed on the map',
-      sourceBucket: 'Coarse + Hyperlocal',
+      sourceBucket: 'Source: Stage 1 location context',
       result: checkStatus('location_validation'),
       detail: `The property was matched to a broad zone and nearby context. The system found zone ${coarseBucket?.zoneId || 'not resolved'} and ${summary.totalPOIsFound ?? 0} nearby context signals, which helps compare it with the right area.`
     },
     {
       id: 'size_plausibility',
-      check: 'Size plausibility',
+      check: 'Property size',
       observedValue: `${property.area} sqft`,
       reference: sizeReference,
-      sourceBucket: 'Micro-market',
-      result: sizeFlag?.severity || 'pass',
-      detail: `Your property is ${property.area} sqft. In this area, ${usualSizeText}. This matters because a much smaller or larger property may need extra review before valuation.`
+      sourceBucket: sourceText,
+      result: sizeDecision,
+      detail: `Your property is ${property.area} sqft. In this micro-market, ${usualSizeText}. ${sizeFlag ? 'Because this property sits outside the local range, the system flags it for review.' : 'Because this property sits inside the local range, this check passes.'}`
     },
     {
       id: 'subtype_prevalence',
-      check: 'Property type fit',
-      observedValue: `${property.subtype || profile.propertySubtype} / ${property.config || 'No config'}`,
-      reference: subtypeFlag ? 'This type is uncommon here' : 'This property type is common here',
-      sourceBucket: 'Micro-market',
-      result: subtypeFlag?.severity || 'pass',
-      detail: `Your property is listed as ${prevalence.declared}. Nearby, the most common profile is ${prevalence.dominant}. ${subtypeFlag ? 'Because this is less common here, the system treats it with extra caution.' : 'That is a familiar type in this area, so this check does not raise concern.'}`
+      check: 'Property subtype',
+      observedValue: property.config || property.subtype || profile.propertySubtype,
+      reference: subtypeReference,
+      sourceBucket: sourceText,
+      result: subtypeDecision,
+      detail: Number.isFinite(Number(prevalence.prevalence))
+        ? `Your selected subtype appears in ${formatPercent(prevalence.prevalence)} of similar local records. ${prevalence.isRare ? 'That is rare for this micro-market, so the system treats it with extra caution.' : prevalence.isUncommon ? 'That is uncommon, so the system adds a mild warning.' : 'That is common enough for this micro-market.'}`
+        : `Your property is listed as ${prevalence.declared}. Nearby, the most common profile is ${prevalence.dominant}. ${subtypeFlag ? 'Because this is less common here, the system treats it with extra caution.' : 'That is a familiar type in this area, so this check does not raise concern.'}`
+    },
+    {
+      id: 'data_sufficiency',
+      check: 'Data support',
+      observedValue: `${comparableCount} comparable local records`,
+      reference: dataReference,
+      sourceBucket: sourceText,
+      result: dataDecision,
+      detail: `The system found ${comparableCount} comparable local records. The location match is ${normContext.locationMatchConfidence || 'fallback'}, so the local norm check has ${scores.dataSufficiencyScore < 0.45 ? 'weak' : scores.dataSufficiencyScore < 0.6 ? 'medium' : 'strong'} support.`
+    },
+    {
+      id: 'local_liquidity',
+      check: 'Local liquidity',
+      observedValue: Number.isFinite(liquidityIndex) ? `Liquidity index ${liquidityIndex.toFixed(2)}` : 'Liquidity index unavailable',
+      reference: liquidityLabel(liquidityIndex),
+      sourceBucket: sourceText,
+      result: liquidityDecision,
+      detail: Number.isFinite(liquidityIndex)
+        ? `The local liquidity index is ${liquidityIndex.toFixed(2)}. ${liquidityLabel(liquidityIndex)}. This affects how confidently the system can rely on nearby market behavior.`
+        : 'The system could not resolve a local liquidity index, so it keeps this check conservative.'
     },
     {
       id: 'context_fit',
       check: 'Area fit',
-      observedValue: `${titleCase(accessQuality)} access, ${titleCase(microMarket?.demand || 'unknown')} liquidity`,
-      reference: contextFlags.length ? 'The surrounding area partly supports this claim' : 'The surrounding area supports this claim',
-      sourceBucket: 'Coarse + Micro-market + Hyperlocal',
+      observedValue: `${titleCase(accessQuality)} access, ${titleCase(microMarket?.demand || 'unknown')} demand`,
+      reference: contextFlags.length ? 'Some surrounding signals need review' : 'The surrounding area supports this claim',
+      sourceBucket: 'Source: location and access context',
       result: contextStatus,
-      detail: `This is a ${coarseBucket?.landUseType || 'known'} area with ${titleCase(microMarket?.demand || 'unknown')} demand and ${summary.amenityScore ?? 'some'} access support. Some signals may support the claim more strongly than others, so this check looks for mismatch between the property and its surroundings.`
-    },
-    {
-      id: 'data_sufficiency',
-      check: 'Nearby data support',
-      observedValue: scores.dataSufficiencyScore.toFixed(2),
-      reference: scores.dataSufficiencyScore < 0.45 ? 'Nearby data is limited' : scores.dataSufficiencyScore < 0.6 ? 'Nearby data is usable but thin' : 'We have enough nearby data to judge this case',
-      sourceBucket: 'System',
-      result: scores.dataSufficiencyScore < 0.45 ? 'penalty' : 'pass',
-      detail: `The system found ${localReferenceContext.localLiquidityIndex}. That gives ${scores.dataSufficiencyScore < 0.45 ? 'limited' : scores.dataSufficiencyScore < 0.6 ? 'some' : 'enough'} local support for judging the case. Visual and legal signals also improve confidence when provided.`
+      detail: `This is a ${coarseBucket?.landUseType || 'known'} area with ${titleCase(microMarket?.demand || 'unknown')} demand and ${summary.amenityScore ?? 'some'} access support. This check looks for mismatch between the property and its surroundings.`
     },
     {
       id: 'cross_signal_consistency',
       check: 'Overall consistency',
       observedValue: crossSignalFlags.length ? `${crossSignalFlags.length} combined concern(s)` : 'No major mismatch found',
       reference: crossSignalFlags.length ? 'Multiple signals point to the same concern' : 'No major mismatch found',
-      sourceBucket: 'System + Buckets',
+      sourceBucket: 'Source: combined checks',
       result: crossSignalStatus,
       detail: crossSignalFlags.length
         ? `The size, property type, location, and nearby market context combine into a concern: ${crossSignalFlags.map((flag) => flag.title).join(', ')}. That is why this can affect the final decision.`
@@ -897,28 +1175,31 @@ export function runAnomalyPipeline(
   context = {}
 ) {
   const profile = getProfile(property, context);
+  const normContext = resolveNormContext(context, microMarket, property);
+  const effectiveMicroMarket = applyNormContextToMicroMarket(microMarket, normContext);
   const enrichedProperty = {
     ...property,
     subtype: profile.propertySubtype,
-    isPremiumProfile: isPremiumProfile(profile, property, getNormBands(microMarket?.norms))
+    isPremiumProfile: isPremiumProfile(profile, property, getNormBands(effectiveMicroMarket?.norms))
   };
 
-  const dataSufficiencyScore = calculateDataSufficiency(microMarket, coarseBucket, hasImages, hasLegal);
-  const localReferenceContext = buildLocalReferenceContext(enrichedProperty, microMarket, coarseBucket, dataSufficiencyScore);
+  const dataSufficiencyScore = calculateDataSufficiency(effectiveMicroMarket, coarseBucket, hasImages, hasLegal, normContext);
+  const localReferenceContext = buildLocalReferenceContext(enrichedProperty, effectiveMicroMarket, coarseBucket, dataSufficiencyScore, normContext);
 
   const validityFlags = runBlockingValidityChecks(profile, enrichedProperty, context);
   const locationFlags = runLocationValidation(profile, coarseBucket, hyperlocalContext);
-  const normFlags = compareLocalNorms(enrichedProperty, microMarket);
-  const contextFlags = detectContextMismatch(enrichedProperty, coarseBucket, hyperlocalContext, microMarket);
+  const normFlags = compareLocalNorms(enrichedProperty, effectiveMicroMarket, normContext);
+  const contextFlags = detectContextMismatch(enrichedProperty, coarseBucket, hyperlocalContext, effectiveMicroMarket);
   const baseFlags = [...validityFlags, ...locationFlags, ...normFlags, ...contextFlags];
   const crossSignalFlags = runCrossSignalChecks({
     baseFlags,
     property: enrichedProperty,
     profile,
     coarseBucket,
-    microMarket,
+    microMarket: effectiveMicroMarket,
     hyperlocalContext,
-    dataSufficiencyScore
+    dataSufficiencyScore,
+    normContext
   });
 
   const flags = aggregateFlags(normFlags, contextFlags, crossSignalFlags, validityFlags, locationFlags);
@@ -930,15 +1211,17 @@ export function runAnomalyPipeline(
     flags,
     profile,
     property: enrichedProperty,
-    microMarket,
+    microMarket: effectiveMicroMarket,
     coarseBucket,
     hyperlocalContext,
     localReferenceContext,
-    scores
+    scores,
+    normContext
   });
   const nonProtectiveFlags = flags.filter((flag) => !flag.protective);
 
   const stage2Output = {
+    normSource: normContext.source,
     checksRun,
     localReferenceContext,
     evaluationRows,

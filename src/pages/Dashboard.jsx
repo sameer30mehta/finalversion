@@ -8,7 +8,14 @@ import XAIBubble from '../components/XAIBubble';
 import Stage1IntakeSection from '../components/Dashboard/Stage1IntakeSection';
 import Stage2VerificationSection from '../components/Dashboard/Stage2VerificationSection';
 import HistoricalReliabilitySection from '../components/Dashboard/HistoricalReliabilitySection';
+import PortfolioRiskSection from '../components/Dashboard/PortfolioRiskSection';
+import AIUnderwriterSummarySection from '../components/Dashboard/AIUnderwriterSummarySection';
+import CaseHeader from '../components/Dashboard/CaseHeader';
+import OverviewSection from '../components/Dashboard/OverviewSection';
+import ValuationLiquiditySection from '../components/Dashboard/ValuationLiquiditySection';
+import FinalDecisionStrip from '../components/Dashboard/FinalDecisionStrip';
 import { runValuation } from '../lib/valuationEngine';
+import { generateUnderwriterSummary } from '../lib/api';
 
 const getStage1Payload = (payload) => payload?.normalizedPropertyProfile ? payload : payload?.stage1 || payload?.stage1Output || null;
 
@@ -30,6 +37,147 @@ const payloadHasImages = (payload) => {
   return Boolean(payload?.enrichment?.images?.exterior);
 };
 
+const pickDefined = (source, keys) => keys.reduce((result, key) => {
+  if (source?.[key] !== undefined && source?.[key] !== null && source?.[key] !== '') {
+    result[key] = source[key];
+  }
+  return result;
+}, {});
+
+const firstItems = (items, limit) => Array.isArray(items) ? items.slice(0, limit) : [];
+
+const compactStage1ForSummary = (stage1 = {}) => {
+  const profile = stage1.normalizedPropertyProfile || stage1.profile || {};
+  const bucketAssignment = stage1.bucketAssignment || {};
+  const coarseBucket = bucketAssignment.coarseBucket || stage1.coarseBucket || {};
+  const microMarketBucket = bucketAssignment.microMarketBucket || stage1.microMarketBucket || {};
+  const hyperlocalContext = stage1.hyperlocalContext || {};
+
+  return {
+    normalizedPropertyProfile: pickDefined(profile, [
+      'address',
+      'propertyType',
+      'subtype',
+      'sizeSqft',
+      'ageBucket',
+      'legalStatus',
+      'titleClarity',
+      'rentalStatus',
+      'occupancyStatus',
+      'imageCount',
+    ]),
+    bucketAssignment: {
+      coarseBucket: pickDefined(coarseBucket, ['id', 'label']),
+      microMarketBucket: pickDefined(microMarketBucket, [
+        'id',
+        'label',
+        'commonSizeBand',
+        'liquidityNorm',
+        'localPriceBand',
+      ]),
+    },
+    hyperlocalContext: pickDefined(hyperlocalContext, ['accessQuality']),
+  };
+};
+
+const compactStage2ForSummary = (stage2 = {}) => ({
+  decision: stage2.decision,
+  scores: stage2.scores || pickDefined(stage2, ['dataSufficiencyScore', 'anomalyScore', 'suspicionScore']),
+  flags: firstItems(stage2.flags, 4),
+  localReferenceContext: stage2.localReferenceContext,
+  evaluationRows: firstItems(stage2.evaluationRows || stage2.evaluationTable, 4),
+});
+
+const compactHistoricalForSummary = (historical = {}) => ({
+  source: historical.source,
+  overallSignal: historical.overallSignal,
+  confidenceAdjustment: historical.confidenceAdjustment,
+  displayedCount: historical.displayedCount || historical.similarCases?.length || historical.cases?.length,
+  similarCases: firstItems(historical.similarCases || historical.cases, 2).map((item) => pickDefined(item, [
+    'caseId',
+    'similarityScore',
+    'recencyWeight',
+    'confidenceContribution',
+    'outcomeSummary',
+  ])),
+});
+
+const compactPortfolioForSummary = (portfolio = {}) => {
+  const portfolioSummary = portfolio.portfolioSummary || {};
+  return {
+    source: portfolio.source,
+    portfolioSummary: pickDefined(portfolioSummary, [
+      'riskLevel',
+      'portfolioRiskScore',
+      'recommendedLtv',
+      'reviewRecommendation',
+    ]),
+    riskFlags: firstItems(portfolio.riskFlags, 4),
+  };
+};
+
+const buildUnderwriterSummaryPayload = (data) => {
+  const stage1 = data?.stage1 || data?.stage1Output || {};
+  const stage2Output = data?.stage2Output || {};
+  return {
+    caseId: data?.caseId || data?.property_id || stage1?.stage1Metadata?.generatedAt || 'CURRENT_CASE',
+    stage1: compactStage1ForSummary(stage1),
+    stage2Output: compactStage2ForSummary(stage2Output),
+    valuation: {
+      marketValue: data?.marketValue,
+      distressValue: data?.distressValue,
+      timeToLiquidateDays: data?.timeToSell,
+      confidenceScore: data?.confidence,
+    },
+    historicalCaseSummary: compactHistoricalForSummary(data?.historicalCaseSummary || {}),
+    portfolioRiskSummary: compactPortfolioForSummary(data?.portfolioRiskSummary || {}),
+    numericDecisionBoundary: 'All numeric scores, value estimates, LTV adjustments, and risk flags are computed by deterministic engines. The AI summary only explains those outputs and recommends evidence.',
+  };
+};
+
+const getUnderwriterSummaryRequestKey = (data) => {
+  if (!data) return null;
+  return [
+    data?.caseId || data?.property_id || data?.stage1?.stage1Metadata?.generatedAt || 'CURRENT_CASE',
+    data?.stage1?.normalizedPropertyProfile?.address || data?.address || '',
+    data?.stage1?.normalizedPropertyProfile?.sizeSqft || data?.size || data?.area || '',
+    data?.stage2Output?.decision || data?.verificationDecision?.decision || '',
+    data?.marketValue || ''
+  ].join('|');
+};
+
+const normalizeUnderwriterSummaryResponse = (response, defaultMode = 'auto') => {
+  const source = response?.source || 'unavailable';
+  const mode = response?.mode || defaultMode;
+  const summaryQuality = response?.summaryQuality || (
+    source === 'rule_based_fallback'
+      ? 'fallback'
+      : mode === 'enhanced'
+        ? 'enhanced'
+        : mode === 'fast'
+          ? 'fast'
+          : 'unavailable'
+  );
+
+  return {
+    source,
+    modelUsed: response?.modelUsed ?? null,
+    fallbackUsed: Boolean(response?.fallbackUsed),
+    mode,
+    summaryQuality,
+    upgradeAvailable: Boolean(response?.upgradeAvailable),
+    error: response?.error || null,
+    summary: response?.summary || null,
+    llmDebug: response?.llmDebug || null
+  };
+};
+
+const isEnhancedUpgrade = (response) => (
+  response?.source === 'ollama' &&
+  response?.summaryQuality === 'enhanced' &&
+  Boolean(response?.summary)
+);
+
 export default function Dashboard() {
   const [searchParams] = useSearchParams();
   const isDemo = searchParams.get('demo') === 'true';
@@ -40,10 +188,22 @@ export default function Dashboard() {
   
   const [fieldDataIncluded, setFieldDataIncluded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [underwriterSummary, setUnderwriterSummary] = useState(null);
+  const [isUnderwriterSummaryLoading, setIsUnderwriterSummaryLoading] = useState(false);
+  const [underwriterSummaryEnhancement, setUnderwriterSummaryEnhancement] = useState({ status: 'idle', message: '' });
+  const underwriterSummaryRequestRef = useRef({
+    key: null,
+    fastPromise: null,
+    enhancedPromise: null,
+    enhancementTimerId: null,
+    enhancedRequestStarted: false,
+    enhancedSummaryCommitted: false,
+    visibleSummarySource: null
+  });
+  const underwriterSummarySequenceRef = useRef(0);
 
   // Modal & Notification States
   const [toast, setToast] = useState(null); 
-  const [actionModal, setActionModal] = useState(null); 
   const [selectedImage, setSelectedImage] = useState(null); 
 
   // Map Filter States
@@ -51,6 +211,9 @@ export default function Dashboard() {
   const [showMetro, setShowMetro] = useState(true);
   const [showFlood, setShowFlood] = useState(false);
   const [showImpactFactors, setShowImpactFactors] = useState(true);
+  
+  // Dashboard Tabs State
+  const [activeTab, setActiveTab] = useState('summary');
 
   // True CUDA Vision Backend State
   const [detectedBoxes, setDetectedBoxes] = useState({});
@@ -102,9 +265,259 @@ export default function Dashboard() {
      }
   }, [selectedImage]);
 
+  useEffect(() => {
+    if (!currentData) {
+      if (underwriterSummaryRequestRef.current.enhancementTimerId) {
+        window.clearTimeout(underwriterSummaryRequestRef.current.enhancementTimerId);
+      }
+      setUnderwriterSummary(null);
+      setIsUnderwriterSummaryLoading(false);
+      setUnderwriterSummaryEnhancement({ status: 'idle', message: '' });
+      underwriterSummaryRequestRef.current = {
+        key: null,
+        fastPromise: null,
+        enhancedPromise: null,
+        enhancementTimerId: null,
+        enhancedRequestStarted: false,
+        enhancedSummaryCommitted: false,
+        visibleSummarySource: null
+      };
+      return;
+    }
+
+    const requestKey = getUnderwriterSummaryRequestKey(currentData);
+    const summaryPayload = buildUnderwriterSummaryPayload(currentData);
+    const requestSequence = underwriterSummarySequenceRef.current + 1;
+    underwriterSummarySequenceRef.current = requestSequence;
+
+    const clearEnhancementTimer = () => {
+      if (!underwriterSummaryRequestRef.current.enhancementTimerId) return;
+      window.clearTimeout(underwriterSummaryRequestRef.current.enhancementTimerId);
+      underwriterSummaryRequestRef.current = {
+        ...underwriterSummaryRequestRef.current,
+        enhancementTimerId: null
+      };
+    };
+
+    const startEnhancedSummary = () => {
+      if (underwriterSummarySequenceRef.current !== requestSequence) return;
+
+      const requestState = underwriterSummaryRequestRef.current;
+      if (requestState.key !== requestKey || requestState.enhancedRequestStarted) return;
+
+      clearEnhancementTimer();
+
+      let enhancedPromise = requestState.enhancedPromise;
+      if (!enhancedPromise) {
+        enhancedPromise = generateUnderwriterSummary(summaryPayload, { mode: 'enhanced' });
+      }
+
+      underwriterSummaryRequestRef.current = {
+        ...requestState,
+        enhancedPromise,
+        enhancementTimerId: null,
+        enhancedRequestStarted: true
+      };
+      setUnderwriterSummaryEnhancement({
+        status: 'enhancing',
+        message: 'Enhancing summary with qwen2.5:7b...'
+      });
+
+      enhancedPromise
+        .then((enhancedResult) => {
+          if (underwriterSummarySequenceRef.current !== requestSequence) return;
+
+          const normalizedEnhanced = normalizeUnderwriterSummaryResponse(enhancedResult, 'enhanced');
+          if (isEnhancedUpgrade(normalizedEnhanced)) {
+            underwriterSummaryRequestRef.current = {
+              ...underwriterSummaryRequestRef.current,
+              enhancedSummaryCommitted: true,
+              visibleSummarySource: 'ollama'
+            };
+            setUnderwriterSummary(normalizedEnhanced);
+            setUnderwriterSummaryEnhancement({
+              status: 'upgraded',
+              message: 'Enhanced summary replaced the fast summary.'
+            });
+            showToast(`AI summary upgraded with ${normalizedEnhanced.modelUsed || 'qwen2.5:7b'}.`, 'success');
+            return;
+          }
+
+          const currentSummarySource = underwriterSummaryRequestRef.current.visibleSummarySource || 'unavailable';
+
+          if (currentSummarySource === 'ollama') {
+            setUnderwriterSummaryEnhancement({
+              status: 'unavailable',
+              message: 'Enhanced model unavailable; fast summary retained.'
+            });
+            showToast('Fast AI summary retained. Enhanced model was unavailable.', 'info');
+          } else if (currentSummarySource === 'rule_based_fallback') {
+            setUnderwriterSummaryEnhancement({
+              status: 'unavailable',
+              message: 'Enhanced model unavailable; rule-based fallback retained.'
+            });
+            showToast('Fallback AI summary retained. Enhanced model was unavailable.', 'info');
+          } else {
+            setUnderwriterSummaryEnhancement({
+              status: 'unavailable',
+              message: 'Enhanced model unavailable while the fast summary is still loading.'
+            });
+            showToast('Enhanced model was unavailable while the fast summary was still loading.', 'info');
+          }
+        })
+        .catch((error) => {
+          if (underwriterSummarySequenceRef.current !== requestSequence) return;
+          console.warn('Enhanced AI summary unavailable; retaining current summary.', error);
+          const currentSummarySource = underwriterSummaryRequestRef.current.visibleSummarySource || 'unavailable';
+          if (currentSummarySource === 'ollama') {
+            setUnderwriterSummaryEnhancement({
+              status: 'unavailable',
+              message: 'Enhanced model unavailable; fast summary retained.'
+            });
+            showToast('Fast AI summary retained. Enhanced model was unavailable.', 'info');
+          } else if (currentSummarySource === 'rule_based_fallback') {
+            setUnderwriterSummaryEnhancement({
+              status: 'unavailable',
+              message: 'Enhanced model unavailable; rule-based fallback retained.'
+            });
+            showToast('Fallback AI summary retained. Enhanced model was unavailable.', 'info');
+          } else {
+            setUnderwriterSummaryEnhancement({
+              status: 'unavailable',
+              message: 'Enhanced model unavailable while the fast summary is still loading.'
+            });
+            showToast('Enhanced model was unavailable while the fast summary was still loading.', 'info');
+          }
+        })
+        .finally(() => {
+          if (underwriterSummarySequenceRef.current === requestSequence) {
+            underwriterSummaryRequestRef.current = {
+              ...underwriterSummaryRequestRef.current,
+              enhancedPromise: null,
+              enhancementTimerId: null,
+            };
+          }
+        });
+    };
+
+    let fastPromise = (
+      underwriterSummaryRequestRef.current.key === requestKey
+      ? underwriterSummaryRequestRef.current.fastPromise
+      : null
+    );
+
+    if (!fastPromise) {
+      fastPromise = generateUnderwriterSummary(summaryPayload, { mode: 'fast' });
+    }
+
+    underwriterSummaryRequestRef.current = {
+      key: requestKey,
+      fastPromise,
+      enhancedPromise: null,
+      enhancementTimerId: null,
+      enhancedRequestStarted: false,
+      enhancedSummaryCommitted: false,
+      visibleSummarySource: null
+    };
+    setUnderwriterSummary(null);
+    setIsUnderwriterSummaryLoading(true);
+    setUnderwriterSummaryEnhancement({ status: 'idle', message: '' });
+
+    fastPromise
+      .then((result) => {
+        if (underwriterSummarySequenceRef.current !== requestSequence) return;
+
+        const fastResponse = normalizeUnderwriterSummaryResponse(result, 'fast');
+        if (!underwriterSummaryRequestRef.current.enhancedSummaryCommitted) {
+          underwriterSummaryRequestRef.current = {
+            ...underwriterSummaryRequestRef.current,
+            visibleSummarySource: fastResponse.source
+          };
+          setUnderwriterSummary(fastResponse);
+        }
+        setIsUnderwriterSummaryLoading(false);
+
+        if (fastResponse.source === 'rule_based_fallback') {
+          showToast('AI summary is available in fallback form. Enhanced model will be attempted next.', 'info');
+        } else if (fastResponse.summary) {
+          showToast('Fast AI underwriter summary is ready in the AI Brief tab.', 'info');
+        }
+
+        if (!fastResponse.upgradeAvailable) {
+          clearEnhancementTimer();
+          underwriterSummaryRequestRef.current = {
+            ...underwriterSummaryRequestRef.current,
+            fastPromise: null,
+            enhancedPromise: null
+          };
+          return;
+        }
+
+        startEnhancedSummary();
+      })
+      .catch((error) => {
+        if (underwriterSummarySequenceRef.current !== requestSequence) return;
+        setUnderwriterSummary(
+          normalizeUnderwriterSummaryResponse({
+            source: 'unavailable',
+            modelUsed: null,
+            fallbackUsed: false,
+            mode: 'fast',
+            summaryQuality: 'unavailable',
+            upgradeAvailable: false,
+            error: error?.message || 'AI underwriter summary unavailable',
+            summary: null
+          }, 'fast')
+        );
+        clearEnhancementTimer();
+        underwriterSummaryRequestRef.current = {
+          ...underwriterSummaryRequestRef.current,
+          fastPromise: null,
+          enhancedPromise: null,
+          enhancementTimerId: null
+        };
+        setUnderwriterSummaryEnhancement({ status: 'idle', message: '' });
+        setIsUnderwriterSummaryLoading(false);
+      })
+      .finally(() => {
+        if (underwriterSummarySequenceRef.current === requestSequence) {
+          underwriterSummaryRequestRef.current = {
+            ...underwriterSummaryRequestRef.current,
+            fastPromise: null
+          };
+          setIsUnderwriterSummaryLoading(false);
+        }
+      });
+
+    return () => {
+      clearEnhancementTimer();
+    };
+  }, [currentData]);
+
+  const resetUnderwriterSummary = () => {
+    underwriterSummarySequenceRef.current += 1;
+    if (underwriterSummaryRequestRef.current.enhancementTimerId) {
+      window.clearTimeout(underwriterSummaryRequestRef.current.enhancementTimerId);
+    }
+    underwriterSummaryRequestRef.current = {
+      key: null,
+      fastPromise: null,
+      enhancedPromise: null,
+      enhancementTimerId: null,
+      enhancedRequestStarted: false,
+      enhancedSummaryCommitted: false,
+      visibleSummarySource: null
+    };
+    setUnderwriterSummary(null);
+    setIsUnderwriterSummaryLoading(false);
+    setUnderwriterSummaryEnhancement({ status: 'idle', message: '' });
+  };
+
   const handleWizardSubmit = (payload) => {
     setShowWizard(false);
     setPendingPayload(payload);
+    setActiveTab('summary');
+    resetUnderwriterSummary();
     setIsLoading(true); // Triggers AgentTerminal
   };
   const finalizeValuation = async () => {
@@ -115,6 +528,7 @@ export default function Dashboard() {
       results.coordinates = targetCenter;
       
       setCurrentData(results);
+      setActiveTab('summary');
       setFieldDataIncluded(payloadHasImages(pendingPayload));
     } catch (error) {
       console.error("Valuation Engine Error:", error);
@@ -134,23 +548,6 @@ export default function Dashboard() {
     return 251 - (251 * (score / 100));
   };
 
-  const handleActionClick = (action) => {
-    if (action === 'approve') {
-      showToast("Loan successfully approved via PropScore Multi-Agent Consensus.", "success");
-    } else {
-      setActionModal(action);
-    }
-  };
-
-  const submitAction = () => {
-    if (actionModal === 'reject_case') {
-      showToast("Case has been officially rejected.", "error");
-    } else if (actionModal === 'request_info') {
-      showToast("Vision & Legal Agents dispatched to request further info.", "info");
-    }
-    setActionModal(null);
-  };
-
   const defaultExterior = "https://lh3.googleusercontent.com/aida-public/AB6AXuA1SApb750yQYbJtFHGRemWz--sEHdPwXTJr5nCpIK_cj6gKGKzRn7EHOVIynJu4gnSDq3IfgclBa-N1AYzotN_OSVnwAMma4ujpHUh6PDPe4gjWQb1MEx6gqZO4FW9Cc4WbRilA3v-rJq5JTdcCROu0y0vwZ9T6VLnU2AdSpJgX6OYZvhkgiGbtEJk51NG3_cjrWA3MU8R7JuotoyBjEjvq3_eLylkq3rv5ADbknUoRfFLNcsDjsC8P5DIRtZ9vF9z7kS7WAEPJTPv";
   const defaultLiving = "https://lh3.googleusercontent.com/aida-public/AB6AXuAjHoqaV86y19B2s3MLps2eYeM0bz5984kIaOpdLw4IvBDkDC8Ucna9rdaBgoijAwlZ5kTqU9WvU7ecUmTQixJG5IX2Ncnw2hgvZEcPBoaGf5HFE9G-_1eZ9ECF1U-5fRH_ko2gUVuoM5rwvH-GAfGTFJK--P42SyYdTSpkPZvoHuPiORe_F3HWI7JR5sWskKEZvjvPQugYLrLTFVp5ZcIUS5O7e8D5iykxzpKmWx54odKLNg2B7C3ih1NSaXzDKzI-EDBmlCcVqAU6";
   const defaultKitchen = "https://lh3.googleusercontent.com/aida-public/AB6AXuB8XGn5YwGAABpNvnbJvaA57CyQyc_Z3mlGZynB3mg1irAN1ZxTTr0ilTosQrAUIC_ELEFiXWlNwPMVxuIDSn_TQgzqWAAOxAlI_wYvLChOAVaHRutWGrkZ6UIo121roaZYD_xCgkx0mJgqXzgOOFsi0CqotflFpbDaBPHOo-Q2_mW3T53mUsn7-OJZcIQ_KZNF6UMwD4qIVzCVCIHbDMf31b3eBxx9G7xGTz9IaBCcd91Z1OW5DoUU2gkJimJHgMZv-ABprPcaEnsI";
@@ -164,7 +561,7 @@ export default function Dashboard() {
                            selectedImage === 'kitchen' ? getImageUrl(2, defaultKitchen) : null;
 
   return (
-    <div className="flex h-screen overflow-hidden relative bg-slate-50">
+    <div className="flex h-screen overflow-hidden relative bg-[#eef2f6]">
       {/* Toast Notification Portal */}
       {toast && (
         <div className={`fixed top-4 right-4 z-[999] px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 transition-all animate-bounce ${
@@ -179,39 +576,6 @@ export default function Dashboard() {
 
       {/* Modals & Overlays */}
       {showWizard && <InputWizard onSubmit={handleWizardSubmit} onCancel={() => setShowWizard(false)} />}
-
-      {/* Action Dialog Modal */}
-      {actionModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-[0_8px_40px_rgba(0,0,0,0.12)] p-6 max-w-md w-full border border-slate-100 animate-in fade-in zoom-in duration-200">
-            <h3 className="text-xl font-bold font-headline mb-2 text-slate-800">
-              {actionModal === 'reject_case' ? 'Confirm Case Rejection' : 'Request Additional Information'}
-            </h3>
-            <p className="text-sm text-slate-500 mb-4 font-body">
-              {actionModal === 'reject_case' 
-                ? 'Are you sure you want to permanently reject this collateral assessment? This action will notify the underwriting department.' 
-                : 'Specify the additional documents or field verification details required directly below.'}
-            </p>
-            {actionModal === 'request_info' && (
-              <textarea 
-                className="w-full border border-slate-200 rounded-lg p-3 text-sm mb-4 focus:ring-2 focus:ring-primary focus:border-primary outline-none min-h-[100px]"
-                placeholder="E.g. Please provide updated property tax receipts..."
-              ></textarea>
-            )}
-            <div className="flex justify-end gap-3 font-plus-jakarta mt-2">
-              <button onClick={() => setActionModal(null)} className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
-              <button 
-                onClick={submitAction}
-                className={`px-6 py-2 rounded-lg text-sm font-bold text-white shadow-md transition-colors ${
-                  actionModal === 'reject_case' ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'
-                }`}
-              >
-                {actionModal === 'reject_case' ? 'Reject Application' : 'Send Agent Request'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Image Annotation Modal */}
       {selectedImage && (
@@ -255,89 +619,48 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* SideNavBar */}
-      <aside className="flex flex-col h-full p-6 border-r border-slate-200 bg-white hidden md:flex w-72 shrink-0 relative z-40 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
-        <div className="mb-8">
-          <h1 className="text-2xl font-black text-slate-900 font-headline">PropScore</h1>
-          <p className="text-[11px] text-indigo-600 font-bold uppercase tracking-widest mt-1">Multi-Agent Valuator</p>
-        </div>
-        <button 
-          onClick={() => setShowWizard(true)}
-          className="bg-indigo-600 text-white rounded-md py-2.5 px-4 flex items-center justify-center gap-2 mb-8 shadow-md hover:bg-indigo-700 transition-colors"
-        >
-          <span className="material-symbols-outlined text-sm">add</span>
-          <span className="text-sm font-bold">New Initialization</span>
-        </button>
-
-        {/* Enrichment Panel */}
-        {currentData && (
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4 shadow-inner">
-            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-1">
-               <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-               Agents Dispatched
-            </h4>
-            <div className="mt-2 space-y-3">
-              {[
-                { title: "Geospatial Agent", complete: true },
-                { title: "Market Agent (Pricing)", complete: true },
-                { title: "Legal Agent", complete: currentData.confidenceBreakdown.legal > 0 },
-                { title: "Vision Agent", complete: fieldDataIncluded },
-                { title: "Coordinator Protocol", complete: true }
-              ].map((step, idx) => (
-                 <div key={idx} className="flex gap-3">
-                    <div className="flex flex-col items-center">
-                       <div className={`w-4 h-4 rounded-full flex items-center justify-center border-2 ${
-                          step.complete ? 'bg-emerald-500 border-emerald-500 relative' : 'border-slate-300 bg-white'
-                       }`}>
-                          {step.complete && <span className="material-symbols-outlined text-[10px] text-white">check</span>}
-                       </div>
-                    </div>
-                    <span className={`text-[13px] font-medium leading-none ${step.complete ? 'text-slate-800' : 'text-slate-400'}`}>
-                       {step.title}
-                    </span>
-                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <nav className="flex-1 space-y-1">
-          <a className="flex items-center gap-3 px-3 py-2 text-indigo-700 font-bold bg-indigo-50 rounded-lg transition-all" href="#">
-            <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>dashboard</span>
-            <span className="font-manrope text-sm font-medium">Dashboard Hub</span>
-          </a>
-        </nav>
-      </aside>
-
       {/* Main Content Wrapper */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* TopNavBar */}
-        <header className="flex justify-between items-center px-8 py-4 w-full bg-white border-b border-slate-200 z-50">
-          <div className="flex items-center gap-4">
-             <span className="px-3 py-1 bg-indigo-50 text-indigo-700 font-mono text-[10px] font-bold rounded flex items-center gap-2 border border-indigo-100">
-                <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-                PROPSCORE CORE ACTIVE
-             </span>
+        <header className="z-50 flex w-full items-center justify-between border-b border-slate-200 bg-white px-5 py-4 md:px-8">
+          <div className="flex items-center gap-5">
+            <div>
+              <h1 className="text-xl font-black tracking-tight text-slate-950">PropScore</h1>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Collateral intelligence</p>
+            </div>
+            <span className="hidden items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700 md:flex">
+              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+              Deterministic engines active
+            </span>
           </div>
-          <div className="flex items-center gap-4">
-            <button className="p-2 text-slate-500 hover:bg-slate-50/50 rounded-full transition-colors">
-              <span className="material-symbols-outlined">notifications</span>
+          <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-3 text-[12px] font-bold uppercase tracking-wider text-slate-500 lg:flex">
+              <span>Local SQLite</span>
+              <span className="h-1 w-1 rounded-full bg-slate-300"></span>
+              <span>FastAPI</span>
+              <span className="h-1 w-1 rounded-full bg-slate-300"></span>
+              <span>Ollama optional</span>
+            </div>
+            <button
+              onClick={() => setShowWizard(true)}
+              className="flex items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
+            >
+              <span className="material-symbols-outlined text-[18px]">add</span>
+              New Case
             </button>
-            <a href="/sample-report.pdf" download className="p-2 text-slate-500 hover:bg-slate-50/50 rounded-full transition-colors hidden md:block" title="Export Report">
-              <span className="material-symbols-outlined">download</span>
-            </a>
           </div>
         </header>
 
         {/* Scrollable Content */}
-        <main className="flex-1 overflow-y-auto p-8 pb-32 transition-opacity duration-300 relative bg-slate-50/50">
+        <main className="flex-1 overflow-y-auto p-5 pb-32 transition-opacity duration-300 relative bg-[#eef2f6] md:p-8">
           
           {isLoading && pendingPayload && (
-            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-50/80 backdrop-blur-md pb-20">
-              <div className="mb-6 flex flex-col items-center">
-                 <div className="w-16 h-16 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-                 <h2 className="text-xl font-bold font-headline text-slate-800">Orchestrating AI Swarm...</h2>
-                 <p className="text-sm text-slate-500">Dispatching specialized agents to resolve valuation.</p>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-50/90 backdrop-blur-md px-4 py-6">
+              <div className="w-full max-w-4xl">
+              <div className="mb-5 flex flex-col items-center text-center">
+                 <div className="w-12 h-12 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
+                 <h2 className="text-xl font-bold font-headline text-slate-800">Generating collateral intelligence</h2>
+                 <p className="text-sm text-slate-500">The deterministic valuation and verification pipeline is running.</p>
               </div>
               <AgentTerminal 
               isActive={isLoading} 
@@ -347,6 +670,7 @@ export default function Dashboard() {
               blockComplete={visionStatus.startsWith('Downloading')}
               onComplete={finalizeValuation} 
             />
+              </div>
             </div>
           )}
 
@@ -355,12 +679,97 @@ export default function Dashboard() {
           ) : (
              currentData && (
               <div className={`max-w-7xl mx-auto space-y-6 ${isLoading ? 'opacity-0 scale-95 transition-all' : 'opacity-100 scale-100 transition-all duration-500'}`}>
+                <CaseHeader
+                  data={currentData}
+                  aiStatus={
+                    isUnderwriterSummaryLoading
+                      ? 'Generating'
+                      : underwriterSummaryEnhancement.status === 'enhancing'
+                        ? 'Enhancing'
+                        : underwriterSummary?.summaryQuality || 'Pending'
+                  }
+                />
                 
-                <Stage1IntakeSection stage1={currentData.stage1} />
-                <Stage2VerificationSection stage2Output={currentData.stage2Output} />
-                
-                {/* Decision Banner Row */}
-                <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between mt-2">
+                {/* Clean Tab Navigation */}
+                <div className="sticky top-0 z-30 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur">
+                  <div className="flex gap-1.5 overflow-x-auto">
+                  {[
+                    { id: 'summary', label: 'Overview', icon: 'monitoring' },
+                    { id: 'intake', label: 'Stage 1 Buckets', icon: 'rule_settings' },
+                    { id: 'verification', label: 'Stage 2 Verification', icon: 'fact_check' },
+                    { id: 'valuation', label: 'Valuation', icon: 'payments' },
+                    { id: 'history', label: 'Historical Cases', icon: 'history' },
+                    { id: 'portfolio', label: 'Portfolio Risk', icon: 'account_balance' },
+                    {
+                      id: 'ai',
+                      label: 'AI Brief',
+                      icon: 'psychology',
+                      status: isUnderwriterSummaryLoading
+                        ? 'Fast'
+                        : underwriterSummaryEnhancement.status === 'scheduled'
+                          ? 'Queued'
+                        : underwriterSummaryEnhancement.status === 'enhancing'
+                          ? 'Enhancing'
+                          : underwriterSummaryEnhancement.status === 'upgraded'
+                            ? 'Enhanced'
+                            : underwriterSummary?.summary
+                              ? 'Ready'
+                              : null
+                    },
+                    { id: 'analysis', label: 'Visual Evidence', icon: 'camera_enhance' },
+                    { id: 'location', label: 'Map Intelligence', icon: 'public' }
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`px-3 py-2 text-sm font-bold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                        activeTab === tab.id 
+                          ? 'text-white bg-slate-950 border border-slate-950 shadow-sm' 
+                          : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+                      {tab.label}
+                      {tab.status && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 text-[9px] font-black uppercase tracking-widest">
+                          {tab.status}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                  </div>
+                </div>
+
+                {activeTab === 'summary' && (
+                  <OverviewSection
+                    data={currentData}
+                    underwriterSummary={underwriterSummary}
+                    isUnderwriterSummaryLoading={isUnderwriterSummaryLoading}
+                  />
+                )}
+
+                {activeTab === 'intake' && <Stage1IntakeSection stage1={currentData.stage1} />}
+
+                {activeTab === 'verification' && <Stage2VerificationSection stage2Output={currentData.stage2Output} />}
+
+                {activeTab === 'valuation' && <ValuationLiquiditySection data={currentData} />}
+
+                {activeTab === 'history' && <HistoricalReliabilitySection historicalCaseSummary={currentData.historicalCaseSummary} />}
+
+                {activeTab === 'portfolio' && <PortfolioRiskSection portfolioRiskSummary={currentData.portfolioRiskSummary} />}
+
+                {activeTab === 'ai' && (
+                  <AIUnderwriterSummarySection
+                    summaryResponse={underwriterSummary}
+                    isLoading={isUnderwriterSummaryLoading}
+                    enhancementState={underwriterSummaryEnhancement}
+                  />
+                )}
+
+                {false && activeTab === 'summary' && (
+                  <>
+                    {/* Decision Banner Row */}
+                    <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between mt-2">
                    <div className="flex items-start md:items-center gap-4">
                       <div className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 ${
                          currentData.verificationDecision.decision.includes('REJECT') ? 'bg-red-100 text-red-600' : 
@@ -556,14 +965,17 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
+                </>
+                )}
 
                 {/* Middle Row: Drivers, Visual Audit */}
+                {activeTab === 'analysis' && (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
                   {/* Value Drivers */}
                   <div className="space-y-6 lg:col-span-1 h-full">
                     <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm h-full min-h-[410px] flex flex-col">
                       <h3 className="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2 flex items-center justify-between">
-                         Appraisers & Multipliers
+                         Valuation Drivers
                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">MARKET_AGENT</span>
                       </h3>
                       <ul className="space-y-4 flex-1">
@@ -586,11 +998,10 @@ export default function Dashboard() {
 
                   {/* AI Visual Audit */}
                   <div className="bg-white rounded-xl p-6 lg:col-span-2 border border-slate-200 shadow-sm flex flex-col relative overflow-hidden h-full">
-                    <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500 opacity-[0.02] rounded-full blur-[60px] pointer-events-none"></div>
                     <div className="flex justify-between items-center mb-2 relative z-10">
                       <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                         <span className="material-symbols-outlined text-emerald-500">camera_enhance</span>
-                        Vision Agent Diagnostics
+                        Visual Evidence Review
                         <XAIBubble title="Hardware-Accelerated Vision Pipeline">
                           <p>Property images are analysed by a zero-shot object detection transformer running natively on your GPU:</p>
                           <div className="bg-slate-50 rounded-lg p-3 font-mono text-xs text-slate-600 mt-2 space-y-1 border border-slate-100">
@@ -678,15 +1089,15 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-
-                <HistoricalReliabilitySection historicalCaseSummary={currentData.historicalCaseSummary} />
+                )}
 
                 {/* Bottom Row: Map */}
+                {activeTab === 'location' && (
                 <div className="bg-white rounded-xl p-6 w-full border border-slate-200 shadow-sm mb-8 relative z-0">
                    <div className="flex justify-between items-center mb-2">
                       <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                          <span className="material-symbols-outlined text-indigo-500">public</span>
-                         Geospatial Agent Reconnaissance
+                         Hyperlocal Map Intelligence
                          <XAIBubble title="Location Intelligence Engine">
                            <p>Address is resolved to precise coordinates using the <span className="font-semibold text-slate-800">Komoot Photon</span> geocoder backed by OpenStreetMap data.</p>
                            <div className="bg-slate-50 rounded-lg p-3 font-mono text-xs text-slate-600 mt-2 space-y-1 border border-slate-100">
@@ -704,8 +1115,8 @@ export default function Dashboard() {
                          <button onClick={() => setShowMetro(!showMetro)} className={`px-3 py-1 text-[11px] border rounded-full transition-colors font-bold flex items-center gap-1 ${showMetro ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
                             <span className={`w-2 h-2 rounded-full ${showMetro ? 'bg-emerald-500' : 'bg-slate-300'}`}></span> Metro
                          </button>
-                         <button onClick={() => setShowImpactFactors(!showImpactFactors)} className={`px-3 py-1 text-[11px] border rounded-full transition-colors font-bold flex items-center gap-1 shadow-sm ${showImpactFactors ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                            <span className={`w-2 h-2 rounded-full ${showImpactFactors ? 'bg-purple-500 animate-pulse' : 'bg-slate-300'}`}></span> 📍 Impact Factors
+                         <button onClick={() => setShowImpactFactors(!showImpactFactors)} className={`px-3 py-1 text-[11px] border rounded-full transition-colors font-bold flex items-center gap-1 shadow-sm ${showImpactFactors ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                            <span className={`w-2 h-2 rounded-full ${showImpactFactors ? 'bg-indigo-500' : 'bg-slate-300'}`}></span> Collateral Signals
                          </button>
                       </div>
                    </div>
@@ -719,6 +1130,7 @@ export default function Dashboard() {
                      hyperlocalPOIs={currentData.hyperlocalContext?.pois || []}
                    />
                 </div>
+                )}
 
               </div>
              )
@@ -727,29 +1139,12 @@ export default function Dashboard() {
 
         {/* Bottom Decision Bar */}
         {currentData && !isLoading && (
-          <div className="fixed bottom-0 left-0 md:left-[288px] right-0 w-auto z-50 bg-white border-t border-slate-200 py-3 px-8 flex justify-between items-center shadow-[0_-8px_30px_rgb(0,0,0,0.05)]">
-            <div className="flex items-center gap-3">
-              <span className="text-slate-500 font-bold text-xs uppercase tracking-widest flex items-center gap-1">
-                 <span className="material-symbols-outlined text-[16px]">assured_workload</span>
-                 Calculated Safe LTV:
-              </span>
-              <span className={`text-2xl font-bold ${currentData.ltv < 50 ? 'text-red-600' : 'text-indigo-600'}`}>
-                {currentData.ltv}%
-              </span>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => handleActionClick('reject_case')} className="flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors text-sm font-bold bg-white shadow-sm">
-                Terminate Application
-              </button>
-              <button onClick={() => handleActionClick('request_info')} className="flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors text-sm font-bold bg-white shadow-sm">
-                Request Field Verification
-              </button>
-              <button onClick={() => handleActionClick('approve')} className="flex items-center justify-center gap-2 px-8 py-2.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-500/20 transition-all text-sm font-bold">
-                Authorize Value
-              </button>
-            </div>
-          </div>
+          <FinalDecisionStrip
+            data={currentData}
+            underwriterSummary={underwriterSummary}
+          />
         )}
+
       </div>
     </div>
   );

@@ -10,6 +10,11 @@ function formatRental(value) {
   return `INR ${Number(value).toLocaleString('en-IN')}/month`;
 }
 
+function formatConfidence(value) {
+  if (!value || value === 'fallback') return 'Fallback';
+  return String(value).charAt(0).toUpperCase() + String(value).slice(1);
+}
+
 function InfoCell({ label, value }) {
   return (
     <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
@@ -38,14 +43,14 @@ function HelpTip({ text }) {
 
 function BucketCard({ icon, title, badge, helpText, items }) {
   return (
-    <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 shadow-inner min-h-[230px]">
+    <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 min-h-[210px]">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-indigo-500 text-[22px]">{icon}</span>
           </div>
           <div>
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider">{title}</h4>
+            <h4 className="text-sm font-bold text-slate-900">{title}</h4>
             <span className="inline-block mt-1 px-1.5 py-0.5 bg-white text-slate-500 text-[9px] rounded font-mono border border-slate-200">{displayValue(badge)}</span>
           </div>
         </div>
@@ -68,30 +73,42 @@ export default function Stage1IntakeSection({ stage1 }) {
 
   const profile = stage1.normalizedPropertyProfile;
   const buckets = stage1.bucketAssignment || {};
+  const metadata = stage1.stage1Metadata || {};
   const missingFields = profile.completenessStatus?.missingFields || [];
+  const sourceLabel = metadata.contextSource === 'sqlite'
+    ? 'SQLite reference DB'
+    : 'fallback generated logic';
 
   return (
-    <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+    <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
         <div>
           <h3 className="text-headline-sm font-headline font-bold text-slate-800 flex items-center gap-2">
             <span className="material-symbols-outlined text-indigo-500">rule_settings</span>
-            Stage 1 Intake Resolution
+            Stage 1: Intake & Buckets
           </h3>
-          <p className="text-xs text-slate-500 font-medium mt-1">Normalized profile and spatial bucket assignment for downstream verification.</p>
+          <p className="text-sm text-slate-500 font-medium mt-1">Normalized profile and SQLite-backed spatial bucket assignment for downstream verification.</p>
         </div>
-        <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest border w-max ${
-          profile.completenessStatus?.mandatoryComplete
-            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-            : 'bg-red-50 text-red-600 border-red-200'
-        }`}>
-          {profile.completenessStatus?.mandatoryComplete ? 'Mandatory Complete' : `Missing: ${missingFields.join(', ')}`}
-        </span>
+        <div className="flex flex-wrap md:justify-end gap-2">
+          <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest border w-max ${
+            profile.completenessStatus?.mandatoryComplete
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-red-50 text-red-600 border-red-200'
+          }`}>
+            {profile.completenessStatus?.mandatoryComplete ? 'Mandatory Complete' : `Missing: ${missingFields.join(', ')}`}
+          </span>
+          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-600 border-slate-200">
+            Context source: {sourceLabel}
+          </span>
+          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest border w-max bg-indigo-50 text-indigo-700 border-indigo-100">
+            Location match: {formatConfidence(metadata.locationMatchConfidence)}
+          </span>
+        </div>
       </div>
 
       <div className="space-y-6">
         <div>
-          <h4 className="text-sm font-bold text-slate-800 mb-3 border-b border-slate-100 pb-2">Normalized Property Profile</h4>
+          <h4 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">Normalized Property Profile</h4>
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
             <InfoCell label="Address" value={profile.address} />
             <InfoCell label="Coordinates" value={`${profile.lat}, ${profile.lon}`} />
@@ -109,7 +126,7 @@ export default function Stage1IntakeSection({ stage1 }) {
         </div>
 
         <div>
-          <h4 className="text-sm font-bold text-slate-800 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">
+          <h4 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">
             Bucket Assignment
             <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">STAGE_1_CORE</span>
           </h4>

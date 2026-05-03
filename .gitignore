@@ -7,47 +7,56 @@ dist-ssr/
 .vite/
 *.tsbuildinfo
 
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# Environment and local config
-.env
-.env.*
-!.env.example
-*.local
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.Python
+# Python environments and caches
 .venv/
 venv/
 env/
 ENV/
+__pycache__/
+_pycache_/
+*.pyc
+*.py[cod]
+*$py.class
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 
-# ML/runtime artifacts
-.cache/
-backend/.cache/
+# Environment and local config
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Local data, databases, and runtime artifacts
+data/
+backend/data/
+*.sqlite
+*.sqlite3
+*.db
+D:/PropScore/
+logs/
+uploads/
 backend/uploads/
 backend/tmp/
+models/
+backend/models/
+backend/indexes/
+*.log
+
+# Large or generated ML artifacts
+*.pkl
 *.pt
 *.pth
 *.ckpt
 *.onnx
 
-# OS and editor files
+# OS/editor files
 .DS_Store
 Thumbs.db
 .vscode/*

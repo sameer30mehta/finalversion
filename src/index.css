@@ -1,2 +1,34 @@
-/* Removed local tailwind override to ensure CDN config matches the exact request perfectly */
-body { margin: 0; padding: 0; }
+/* Minimal global polish; product styling stays in React/Tailwind classes. */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #eef2f6;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #eef2f6;
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+::selection {
+  background: #cffafe;
+  color: #0f172a;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}

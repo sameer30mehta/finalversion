@@ -5,8 +5,44 @@ import { assignCoarseBucket, assignMicroMarketBucket, extractHyperlocalContext }
 import { runAnomalyPipeline } from './anomalyEngine';
 import { adaptStage1ForValuation, isStage1Output } from './stage1Engine';
 import { buildHistoricalCaseSummary } from './historicalReliabilityEngine';
+import { resolvePortfolioConcentrationFromBackend } from './api';
 
 const isKnownOptional = (value) => Boolean(value && value !== 'not_provided');
+
+function normalizePortfolioPropertyType(type) {
+  const value = String(type || '').toLowerCase();
+  if (['apartment', 'villa', 'house', 'flat', 'residential'].includes(value)) return 'Residential';
+  if (['commercial', 'office', 'shop', 'showroom', 'warehouse'].includes(value)) return 'Commercial';
+  return type || 'Residential';
+}
+
+function normalizePortfolioSubtype(inputs) {
+  const config = String(inputs.propertyDetails?.config || '').trim();
+  const compact = config.toUpperCase().replace(/\s+/g, '');
+  if (['1BHK', '2BHK', '3BHK'].includes(compact)) return compact;
+  return inputs.propertyDetails?.subtype || inputs.propertyDetails?.type || null;
+}
+
+function unavailablePortfolioRiskSummary() {
+  return {
+    source: 'unavailable',
+    portfolioSummary: {
+      riskLevel: 'Unavailable',
+      portfolioRiskScore: 0,
+      proposedExposure: null,
+      recommendedLtv: null,
+      ltvAdjustmentPct: 0,
+      reviewRecommendation: 'Portfolio concentration data unavailable. Single-case assessment still available.'
+    },
+    riskLenses: [],
+    riskFlags: [],
+    decisionImpact: {
+      confidencePenalty: 0,
+      ltvPenaltyPct: 0,
+      seniorReviewRequired: false
+    }
+  };
+}
 
 export const runValuation = async (payload) => {
   const stage1 = isStage1Output(payload) ? payload : payload?.stage1 || null;
@@ -219,13 +255,25 @@ export const runValuation = async (payload) => {
   }
 
   const confidenceBeforeHistorical = confidence;
-  const historicalCaseSummary = buildHistoricalCaseSummary({
+  const historicalCaseSummary = await buildHistoricalCaseSummary({
     stage1,
     inputs,
     microMarket,
     baseConfidence: confidenceBeforeHistorical
   });
   confidence = Math.min(0.95, Math.max(0.25, historicalCaseSummary.finalConfidence ?? confidence));
+  const estimatedMarketValue = Math.round((marketValueRange[0] + marketValueRange[1]) / 2);
+  const portfolioRiskSummary = await resolvePortfolioConcentrationFromBackend({
+    microMarketId: stage1?.bucketAssignment?.microMarketBucket?.id || microMarket?.bucketId,
+    localityName: inputs.location,
+    propertyType: normalizePortfolioPropertyType(type),
+    subtype: normalizePortfolioSubtype(inputs),
+    estimatedMarketValue,
+    requestedLoanAmount: null,
+    baseLtv: 0.65,
+    liquidityTier: stage1?.bucketAssignment?.microMarketBucket?.liquidityNorm,
+    liquidityIndex: stage1?.marketNorms?.liquidityIndex ?? microMarket?.norms?.liquidityIndex
+  }) || unavailablePortfolioRiskSummary();
 
   return {
     caseDetails: {
@@ -272,6 +320,7 @@ export const runValuation = async (payload) => {
     verificationDecision: anomalyResults.decision,
     stage2Output,
     historicalCaseSummary,
+    portfolioRiskSummary,
     fieldCompleteness: inputs.fieldCompleteness || null,
     stage1,
     stage1Output: stage1,

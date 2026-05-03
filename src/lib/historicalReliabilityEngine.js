@@ -1,4 +1,5 @@
 import { mockHistoricalCases } from '../data/mockHistoricalCases';
+import { resolveHistoricalCasesFromBackend } from './api';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const round2 = (value) => Number(value.toFixed(2));
@@ -36,6 +37,20 @@ function normalizeLegalProfile(value) {
   if (text.includes('lease')) return 'Leasehold';
   if (text.includes('dispute') || text.includes('litigation') || text.includes('unclear')) return 'Disputed';
   return titleCase(value);
+}
+
+function normalizeBackendPropertyType(value) {
+  const text = normalizeText(value);
+  if (['apartment', 'flat', 'villa', 'house', 'residential'].includes(text)) return 'Residential';
+  if (['commercial', 'office', 'shop', 'showroom', 'warehouse'].includes(text)) return 'Commercial';
+  return value || 'Residential';
+}
+
+function normalizeBackendSubtype(currentProfile) {
+  const config = String(currentProfile.config || '').trim();
+  const compact = config.toUpperCase().replace(/\s+/g, '');
+  if (['1BHK', '2BHK', '3BHK'].includes(compact)) return compact;
+  return currentProfile.subtype;
 }
 
 function getSizeBand(size) {
@@ -88,6 +103,19 @@ function buildCurrentProfile({ stage1, inputs, microMarket }) {
     sizeBand: getSizeBand(size),
     ageBucket: normalizeAgeBucket(profile.ageBucket || details.ageBucket, ageYears),
     legalProfile: normalizeLegalProfile(profile.legalStatus || enrichment.legalStatus)
+  };
+}
+
+function buildBackendRequest(currentProfile, baseConfidence) {
+  return {
+    microMarketId: currentProfile.microMarket,
+    localityName: currentProfile.address?.split(',')?.[0]?.trim() || currentProfile.address,
+    propertyType: normalizeBackendPropertyType(currentProfile.propertyType),
+    subtype: normalizeBackendSubtype(currentProfile),
+    sizeSqft: currentProfile.size,
+    ageBucket: currentProfile.ageBucket,
+    legalProfile: currentProfile.legalProfile,
+    baseConfidence
   };
 }
 
@@ -180,7 +208,7 @@ function scoreHistoricalCase(current, historicalCase) {
   };
 }
 
-export function buildHistoricalCaseSummary({ stage1, inputs, microMarket, baseConfidence }) {
+function buildGeneratedHistoricalCaseSummary({ stage1, inputs, microMarket, baseConfidence }) {
   const currentProfile = buildCurrentProfile({ stage1, inputs, microMarket });
   const rankedCases = mockHistoricalCases
     .map((historicalCase) => scoreHistoricalCase(currentProfile, historicalCase))
@@ -209,6 +237,9 @@ export function buildHistoricalCaseSummary({ stage1, inputs, microMarket, baseCo
       : 'Mixed';
 
   return {
+    source: 'generated_fallback',
+    candidateCount: rankedCases.length,
+    displayedCount: selectedCases.length,
     casesFound: selectedCases.length,
     overallSignal,
     confidenceAdjustment,
@@ -232,4 +263,24 @@ export function buildHistoricalCaseSummary({ stage1, inputs, microMarket, baseCo
       : 'Similar internal loan cases found with enough overlap to influence confidence.',
     similarCases: selectedCases
   };
+}
+
+export async function buildHistoricalCaseSummary({ stage1, inputs, microMarket, baseConfidence }) {
+  const currentProfile = buildCurrentProfile({ stage1, inputs, microMarket });
+  const backendSummary = await resolveHistoricalCasesFromBackend(buildBackendRequest(currentProfile, baseConfidence));
+
+  if (backendSummary) {
+    return {
+      liquidityAdjustment: 0,
+      distressAdjustment: 0,
+      ...backendSummary,
+      casesFound: backendSummary.casesFound ?? backendSummary.displayedCount ?? backendSummary.similarCases?.length ?? 0,
+      candidateCount: backendSummary.candidateCount ?? 0,
+      displayedCount: backendSummary.displayedCount ?? backendSummary.similarCases?.length ?? 0,
+      sparse: backendSummary.sparse ?? (backendSummary.similarCases?.length || 0) < 3,
+      note: backendSummary.note || 'SQLite historical cases were used for confidence adjustment.'
+    };
+  }
+
+  return buildGeneratedHistoricalCaseSummary({ stage1, inputs, microMarket, baseConfidence });
 }
