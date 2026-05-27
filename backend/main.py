@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from loguru import logger
 import os
 import sys
 import json
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -27,11 +28,14 @@ from backend.db.repositories import (
     get_historical_case_candidates,
     get_market_norms_with_fallback,
     get_portfolio_concentration_snapshot,
+    init_db,
+    seed_db,
 )
 from backend.llm.ollama_client import (
     build_rule_based_fallback,
     generate_underwriter_summary as generate_underwriter_summary_response,
 )
+from backend.vision import DEFAULT_DAMAGE_LABELS, get_vision_analyzer, load_image_from_bytes, load_image_from_source
 from backend.pipeline_dag import PipelineDAG, geo_enrichment_task, circle_rate_task, ipi_compute_task, market_signals_task, vision_analysis_task, fraud_detection_task, xgboost_multiplier_task, narrative_generation_task
 from backend.websocket_progress import router as progress_router, ProgressTracker
 
@@ -41,17 +45,17 @@ from backend.websocket_progress import router as progress_router, ProgressTracke
 
 class PropertyInput(BaseModel):
     """Initial property input from frontend"""
-    address: str
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    property_type: str  # apartment, house, etc
-    config: Optional[str] = None  # 2BHK, 3BHK
-    carpet_area: float
-    age_bucket: Optional[str] = None
-    occupancy_status: Optional[str] = None
-    legal_status: Optional[str] = None
-    pincode: str
-    city: str
+    address: str = Field(..., min_length=3, max_length=500)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    property_type: str = Field(..., min_length=2, max_length=80)  # apartment, house, etc
+    config: Optional[str] = Field(default=None, max_length=80)  # 2BHK, 3BHK
+    carpet_area: float = Field(..., gt=0, le=250000)
+    age_bucket: Optional[str] = Field(default=None, max_length=80)
+    occupancy_status: Optional[str] = Field(default=None, max_length=80)
+    legal_status: Optional[str] = Field(default=None, max_length=80)
+    pincode: str = Field(..., min_length=3, max_length=12)
+    city: str = Field(..., min_length=2, max_length=80)
     images: Optional[List[str]] = None
 
 class ValuationResponse(BaseModel):
@@ -70,33 +74,33 @@ class ValuationResponse(BaseModel):
 
 class Stage1ResolveContextRequest(BaseModel):
     """Coordinates and property bucket request for SQLite-backed Stage 1 context."""
-    lat: float
-    lon: float
-    propertyType: str = "Residential"
-    subtype: Optional[str] = None
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    propertyType: str = Field(default="Residential", min_length=2, max_length=80)
+    subtype: Optional[str] = Field(default=None, max_length=80)
 
 class HistoricalSimilarCasesRequest(BaseModel):
     """Current case attributes for historical similarity scoring."""
-    microMarketId: Optional[str] = None
-    localityName: Optional[str] = None
-    propertyType: str = "Residential"
-    subtype: Optional[str] = None
-    sizeSqft: Optional[float] = None
-    ageBucket: Optional[str] = None
-    legalProfile: Optional[str] = None
-    baseConfidence: Optional[float] = None
+    microMarketId: Optional[str] = Field(default=None, max_length=80)
+    localityName: Optional[str] = Field(default=None, max_length=160)
+    propertyType: str = Field(default="Residential", min_length=2, max_length=80)
+    subtype: Optional[str] = Field(default=None, max_length=80)
+    sizeSqft: Optional[float] = Field(default=None, gt=0, le=250000)
+    ageBucket: Optional[str] = Field(default=None, max_length=80)
+    legalProfile: Optional[str] = Field(default=None, max_length=80)
+    baseConfidence: Optional[float] = Field(default=None, ge=0, le=1)
 
 class PortfolioConcentrationRiskRequest(BaseModel):
     """Current case attributes for portfolio concentration scoring."""
-    microMarketId: Optional[str] = None
-    localityName: Optional[str] = None
-    propertyType: str = "Residential"
-    subtype: Optional[str] = None
-    estimatedMarketValue: Optional[float] = None
-    requestedLoanAmount: Optional[float] = None
-    baseLtv: Optional[float] = 0.65
-    liquidityTier: Optional[str] = None
-    liquidityIndex: Optional[float] = None
+    microMarketId: Optional[str] = Field(default=None, max_length=80)
+    localityName: Optional[str] = Field(default=None, max_length=160)
+    propertyType: str = Field(default="Residential", min_length=2, max_length=80)
+    subtype: Optional[str] = Field(default=None, max_length=80)
+    estimatedMarketValue: Optional[float] = Field(default=None, gt=0, le=100_000_000_000)
+    requestedLoanAmount: Optional[float] = Field(default=None, gt=0, le=100_000_000_000)
+    baseLtv: Optional[float] = Field(default=0.65, ge=0, le=1)
+    liquidityTier: Optional[str] = Field(default=None, max_length=80)
+    liquidityIndex: Optional[float] = Field(default=None, ge=0, le=1)
 
 class UnderwriterSummaryRequest(BaseModel):
     """Structured deterministic outputs to explain with a local LLM."""
@@ -134,6 +138,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_rate_limit_windows: dict[str, list[float]] = {}
+
+
+@app.middleware("http")
+async def enforce_request_guardrails(request: Request, call_next):
+    """Lightweight demo-safe limits for untrusted collateral submissions."""
+    content_length = request.headers.get("content-length")
+    try:
+        request_bytes = int(content_length) if content_length else 0
+    except ValueError:
+        request_bytes = 0
+    if request_bytes > settings.MAX_REQUEST_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Request body exceeds configured size limit"},
+        )
+
+    if request.method != "OPTIONS" and settings.RATE_LIMIT_PER_MINUTE > 0:
+        client_host = request.client.host if request.client else "unknown"
+        now = time.time()
+        window_start = now - 60
+        recent = [
+            timestamp
+            for timestamp in _rate_limit_windows.get(client_host, [])
+            if timestamp >= window_start
+        ]
+        if len(recent) >= settings.RATE_LIMIT_PER_MINUTE:
+            _rate_limit_windows[client_host] = recent
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Please retry shortly."},
+            )
+        recent.append(now)
+        _rate_limit_windows[client_host] = recent
+
+    return await call_next(request)
 
 # Include WebSocket progress router
 app.include_router(progress_router)
@@ -182,8 +223,85 @@ def check_database_available(session) -> bool:
 
 def check_models_loaded() -> bool:
     """Check if models are pre-loaded"""
-    # TODO: Implement model pre-loading check
-    return True
+    try:
+        runtime = get_vision_analyzer().runtime_info()
+        return bool(runtime.model)
+    except Exception:
+        return False
+
+
+@app.get("/api/vision/status")
+async def vision_status():
+    """Return configured local vision runtime details without forcing model download."""
+    try:
+        runtime = get_vision_analyzer().runtime_info()
+        return {
+            "available": True,
+            "model": runtime.model,
+            "device": runtime.device,
+            "cudaAvailable": runtime.cuda_available,
+            "minScore": settings.VISION_MIN_SCORE,
+            "maxDetections": settings.VISION_MAX_DETECTIONS,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "model": settings.VISION_MODEL,
+            "device": "unknown",
+            "cudaAvailable": False,
+            "error": str(exc),
+        }
+
+
+@app.post("/api/vision/scan")
+@app.post("/scan")
+async def scan_image(request: Request):
+    """
+    Run local OWL-ViT zero-shot object detection on an uploaded property image.
+
+    Accepts multipart `file`, JSON `{ "url": "..." }`, or JSON `{ "image": "data:image/..." }`.
+    The `/scan` alias is kept for older frontend builds; new code should use `/api/vision/scan`.
+    """
+    content_type = request.headers.get("content-type", "")
+    candidate_labels = DEFAULT_DAMAGE_LABELS
+    threshold = settings.VISION_MIN_SCORE
+
+    try:
+        if "application/json" in content_type:
+            data = await request.json()
+            candidate_labels = data.get("candidateLabels") or data.get("candidate_labels") or candidate_labels
+            threshold = float(data.get("threshold", threshold))
+            image_source = data.get("image") or data.get("url")
+            image = load_image_from_source(image_source)
+        else:
+            form = await request.form()
+            file = form.get("file")
+            if file is None:
+                raise ValueError("Multipart request must include a file field")
+            labels_value = form.get("candidateLabels") or form.get("candidate_labels")
+            if labels_value:
+                candidate_labels = json.loads(labels_value) if isinstance(labels_value, str) and labels_value.startswith("[") else str(labels_value).split(",")
+            if form.get("threshold"):
+                threshold = float(form.get("threshold"))
+            image_bytes = await file.read()
+            if len(image_bytes) > settings.VISION_MAX_IMAGE_BYTES:
+                raise ValueError("Uploaded image exceeds configured size limit")
+            image = load_image_from_bytes(image_bytes)
+
+        candidate_labels = [str(label).strip()[:80] for label in candidate_labels if str(label).strip()][:20]
+        if not candidate_labels:
+            candidate_labels = DEFAULT_DAMAGE_LABELS
+        threshold = max(0.01, min(float(threshold), 0.95))
+
+        return await asyncio.to_thread(
+            get_vision_analyzer().scan,
+            image,
+            candidate_labels,
+            threshold,
+        )
+    except Exception as exc:
+        logger.warning(f"Vision scan failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Vision scan failed: {exc}")
 
 # ============================================================================
 # Stage 1 SQLite Context Resolution
@@ -1180,6 +1298,14 @@ async def run_valuation(
     logger.info(f"Valuation request received for {property_input.address}")
     
     try:
+        if property_input.images and len(property_input.images) > settings.VISION_MAX_IMAGES_PER_CASE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"At most {settings.VISION_MAX_IMAGES_PER_CASE} images can be submitted per case",
+            )
+
+        Base.metadata.create_all(bind=engine)
+
         # 1. Store property in database
         property_record = Property(
             address=property_input.address,
@@ -1235,14 +1361,90 @@ async def run_valuation(
             confidence_breakdown=valuation.confidence_breakdown,
             time_to_sell=valuation.time_to_sell,
             risk_level=fraud_flags.risk_level,
-            narrative=pipeline_results["tasks"]["narrative_generation"]["result"]["executive_summary"],
-            fraud_flags=[],  # TODO: Format fraud flags
+            narrative=task_result(
+                pipeline_results["tasks"],
+                "narrative_generation",
+                {"executive_summary": "Valuation completed; narrative model unavailable."},
+            ).get("executive_summary", "Valuation completed."),
+            fraud_flags=fraud_flags.all_flags or [],
             pipeline_execution_time=pipeline_results["total_execution_time"]
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Valuation failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/report/{property_id}")
+async def get_case_report(property_id: str, db: Session = Depends(get_db)):
+    """
+    Return a machine-readable collateral audit report for a stored valuation.
+
+    The hackathon UI can export a client-side audit pack, while this endpoint
+    gives API users a stable backend report contract for stored `/valuate` runs.
+    """
+    property_record = db.query(Property).filter(Property.id == property_id).first()
+    if not property_record:
+        raise HTTPException(status_code=404, detail="Property report not found")
+
+    valuation = (
+        db.query(Valuation)
+        .filter(Valuation.property_id == property_id)
+        .order_by(Valuation.created_at.desc())
+        .first()
+    )
+    fraud_check = (
+        db.query(FraudCheck)
+        .filter(FraudCheck.property_id == property_id)
+        .order_by(FraudCheck.created_at.desc())
+        .first()
+    )
+    if not valuation:
+        raise HTTPException(status_code=404, detail="No valuation report exists for this property")
+
+    return {
+        "reportType": "PropScore collateral audit report",
+        "generatedAt": datetime.utcnow().isoformat(),
+        "property": {
+            "id": property_record.id,
+            "address": property_record.address,
+            "city": property_record.city,
+            "pincode": property_record.pincode,
+            "propertyType": property_record.property_type,
+            "config": property_record.config,
+            "carpetArea": property_record.carpet_area,
+            "status": property_record.status,
+            "createdAt": property_record.created_at.isoformat() if property_record.created_at else None,
+        },
+        "valuation": {
+            "id": valuation.id,
+            "marketValue": valuation.market_value,
+            "distressValue": valuation.distress_value,
+            "propScore": valuation.propScore,
+            "confidenceScore": valuation.confidence_score,
+            "confidenceBreakdown": valuation.confidence_breakdown,
+            "circleRate": valuation.circle_rate,
+            "marketMultiplier": valuation.market_multiplier,
+            "timeToSell": valuation.time_to_sell,
+            "pipelineExecutionTime": valuation.pipeline_execution_time,
+            "hasImages": valuation.has_images,
+            "createdAt": valuation.created_at.isoformat() if valuation.created_at else None,
+        },
+        "fraudReview": {
+            "riskLevel": fraud_check.risk_level if fraud_check else "unavailable",
+            "flags": fraud_check.all_flags if fraud_check else [],
+            "sizeSanityPass": fraud_check.size_sanity_pass if fraud_check else None,
+            "listingPhotoDetected": fraud_check.listing_photo_detected if fraud_check else None,
+            "locationConsistencyScore": fraud_check.location_consistency_score if fraud_check else None,
+        },
+        "deterministicBoundary": (
+            "Numeric scores, value estimates, LTV adjustments, and risk flags are deterministic. "
+            "AI only explains computed outputs and recommends evidence."
+        ),
+        "rawPipeline": valuation.raw_output,
+    }
 
 # ============================================================================
 # Helper Functions
@@ -1266,9 +1468,6 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
     # Create progress tracker for this valuation
     progress_tracker = ProgressTracker(property_id)
     
-    dag = PipelineDAG(max_workers=settings.MAX_WORKERS, progress_tracker=progress_tracker)
-    
-    # Input context
     input_context = {
         "property_id": property_id,
         "address": prop_input.address,
@@ -1281,12 +1480,19 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "has_images": bool(prop_input.images),
         "images": prop_input.images or [],
     }
+
+    dag = PipelineDAG(
+        max_workers=settings.MAX_WORKERS,
+        progress_tracker=progress_tracker,
+        initial_context=input_context,
+    )
     
     # Add tasks in dependency order
     dag.add_task(
         "geo_enrichment",
         lambda ctx: geo_enrichment_task(ctx),
         dependencies=[],
+        is_async=True,
         timeout=10
     )
     
@@ -1294,6 +1500,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "circle_rate",
         lambda ctx: circle_rate_task(ctx),
         dependencies=[],
+        is_async=True,
         timeout=5
     )
     
@@ -1301,6 +1508,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "ipi_compute",
         lambda ctx: ipi_compute_task(ctx),
         dependencies=["geo_enrichment"],
+        is_async=True,
         timeout=15
     )
     
@@ -1308,6 +1516,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "market_signals",
         lambda ctx: market_signals_task(ctx),
         dependencies=[],
+        is_async=True,
         timeout=10
     )
     
@@ -1315,6 +1524,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "vision_analysis",
         lambda ctx: vision_analysis_task(ctx),
         dependencies=[],
+        is_async=True,
         timeout=60  # VLM takes time
     )
     
@@ -1322,6 +1532,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "fraud_detection",
         lambda ctx: fraud_detection_task(ctx),
         dependencies=["vision_analysis", "circle_rate"],
+        is_async=True,
         timeout=30
     )
     
@@ -1329,6 +1540,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "xgboost_multiplier",
         lambda ctx: xgboost_multiplier_task(ctx),
         dependencies=["market_signals", "ipi_compute"],
+        is_async=True,
         timeout=10
     )
     
@@ -1336,6 +1548,7 @@ def build_pipeline(property_id: str, prop_input: PropertyInput, db: Session) -> 
         "narrative_generation",
         lambda ctx: narrative_generation_task(ctx),
         dependencies=["geo_enrichment", "circle_rate", "ipi_compute", "market_signals", "vision_analysis", "fraud_detection", "xgboost_multiplier"],
+        is_async=True,
         timeout=30
     )
     
@@ -1351,12 +1564,13 @@ def aggregate_results(
     
     tasks = pipeline_results["tasks"]
     
-    # Extract key results
-    circle_rate = tasks["circle_rate"]["result"]["circle_rate"]
-    xgb_multiplier = tasks["xgboost_multiplier"]["result"]["market_multiplier"]
-    vision = tasks["vision_analysis"]["result"]
-    market = tasks["market_signals"]["result"]
-    ipi = tasks["ipi_compute"]["result"]
+    # Extract key results, preserving deterministic fallbacks when an optional model is unavailable.
+    circle_rate_result = task_result(tasks, "circle_rate", {"circle_rate": 45000})
+    xgb_result = task_result(tasks, "xgboost_multiplier", {"market_multiplier": 1.0})
+    vision = task_result(tasks, "vision_analysis", {"has_images": False, "condition_score": None})
+    market = task_result(tasks, "market_signals", {})
+    circle_rate = float(circle_rate_result.get("circle_rate") or 45000)
+    xgb_multiplier = float(xgb_result.get("market_multiplier") or 1.0)
     
     # Calculate valuations
     base_value = circle_rate * prop_input.carpet_area
@@ -1376,14 +1590,14 @@ def aggregate_results(
         confidence_breakdown={
             "base": 0.6,
             "legal": 0.15,
-            "visual": 0.15 if vision["has_images"] else 0,
+            "visual": 0.15 if vision.get("has_images") else 0,
             "historical": 0.1
         },
         circle_rate=circle_rate,
         market_multiplier=xgb_multiplier,
         time_to_sell="45-60 days",
         pipeline_execution_time=pipeline_results["total_execution_time"],
-        has_images=vision["has_images"],
+        has_images=bool(vision.get("has_images")),
         raw_output=pipeline_results
     )
     
@@ -1392,6 +1606,12 @@ def aggregate_results(
     db.refresh(valuation)
     
     return valuation
+
+
+def task_result(tasks: Dict[str, Any], name: str, default: Dict[str, Any]) -> Dict[str, Any]:
+    task = tasks.get(name) or {}
+    result = task.get("result")
+    return result if isinstance(result, dict) else default
 
 def calculate_confidence(vision: Dict, prop_input: PropertyInput) -> float:
     """Calculate confidence score based on available data"""
@@ -1419,7 +1639,10 @@ def calculate_propscore(market: Dict, circle_rate: float, vision: Dict) -> float
     if market.get("listing_density", 0) > 0.8:
         base += 10
     
-    if vision.get("condition_score", 5) >= 7:
+    condition_score = vision.get("condition_score")
+    if condition_score is None:
+        condition_score = 5
+    if condition_score >= 7:
         base += 10
     
     return min(100, max(0, base))
@@ -1441,12 +1664,20 @@ def store_fraud_flags(
 ) -> FraudCheck:
     """Store fraud detection results"""
     
-    fraud = pipeline_results["tasks"]["fraud_detection"]["result"]
+    fraud = task_result(pipeline_results.get("tasks", {}), "fraud_detection", {
+        "phash_flag": False,
+        "clip_similarity": 0,
+        "listing_photo_detected": False,
+        "size_sanity_pass": True,
+        "location_consistency": 1,
+        "risk_level": "low",
+        "flags": [],
+    })
     
     fraud_record = FraudCheck(
         property_id=property_id,
         valuation_id=valuation_id,
-        phash_flag=fraud.get("phash_flag", False),
+        phash_match=fraud.get("phash_flag", False),
         phash_score=fraud.get("phash_score"),
         clip_similarity=fraud.get("clip_similarity"),
         clip_flag=fraud.get("clip_similarity", 0) > 0.85,
@@ -1475,6 +1706,14 @@ async def startup_event():
     # Create tables
     from backend.database import Base
     Base.metadata.create_all(bind=engine)
+    init_db()
+    try:
+        locality = find_nearest_locality(19.1136, 72.8697)
+        if not locality:
+            counts = seed_db()
+            logger.info(f"SQLite reference database seeded: {counts}")
+    except Exception as exc:
+        logger.warning(f"SQLite reference database initialization skipped: {exc}")
     
     logger.info("Database tables created")
 

@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     OLLAMA_EMBED_MODEL: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
     
     # Models
+    VISION_MODEL: str = os.getenv("VISION_MODEL", "google/owlvit-base-patch32")
+    VISION_MIN_SCORE: float = float(os.getenv("VISION_MIN_SCORE", "0.08"))
+    VISION_MAX_DETECTIONS: int = env_int("VISION_MAX_DETECTIONS", 8)
+    VISION_MAX_IMAGES_PER_CASE: int = env_int("VISION_MAX_IMAGES_PER_CASE", 5)
+    VISION_MAX_IMAGE_BYTES: int = env_int("VISION_MAX_IMAGE_BYTES", 5 * 1024 * 1024)
+    VISION_ALLOW_PRIVATE_IMAGE_URLS: bool = env_bool("VISION_ALLOW_PRIVATE_IMAGE_URLS", False)
+    VISION_IMAGE_FETCH_TIMEOUT_SECONDS: int = env_int("VISION_IMAGE_FETCH_TIMEOUT_SECONDS", 10)
+    ENABLE_VISION_MODEL: bool = env_bool("ENABLE_VISION_MODEL", True)
     CLIP_MODEL: str = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
     ONNX_NPU_MODEL_PATH: str = os.getenv("ONNX_NPU_MODEL_PATH", "./models/npu/phi-mini.onnx")
     XGBOOST_MODEL_PATH: str = os.getenv("XGBOOST_MODEL_PATH", "./models/xgboost_valuation_model.pkl")
@@ -64,6 +72,8 @@ class Settings(BaseSettings):
     ENABLE_PARALLEL_INFERENCE: bool = True
     MAX_WORKERS: int = 4
     REQUEST_TIMEOUT: int = 60
+    MAX_REQUEST_BYTES: int = env_int("MAX_REQUEST_BYTES", 6 * 1024 * 1024)
+    RATE_LIMIT_PER_MINUTE: int = env_int("RATE_LIMIT_PER_MINUTE", 120)
     
     # Demo data
     DEMO_MODE: bool = False

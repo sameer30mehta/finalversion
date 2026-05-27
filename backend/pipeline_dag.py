@@ -44,12 +44,12 @@ class PipelineDAG:
     Only waits for actual task dependencies, not sequential execution.
     """
     
-    def __init__(self, max_workers: int = 4, progress_tracker=None):
+    def __init__(self, max_workers: int = 4, progress_tracker=None, initial_context: Optional[Dict[str, Any]] = None):
         self.tasks: Dict[str, PipelineTask] = {}
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self.loop = asyncio.new_event_loop()
         self._dependency_graph: Dict[str, set] = {}
         self.progress_tracker = progress_tracker  # Optional progress tracking
+        self.initial_context = initial_context or {}
         
         
     def add_task(
@@ -90,14 +90,34 @@ class PipelineDAG:
                 if deps_satisfied:
                     ready.append(name)
         return ready
+
+    def _skip_tasks_with_failed_dependencies(self) -> int:
+        """Skip pending tasks that can no longer run because a dependency failed."""
+        skipped = 0
+        for name, task in self.tasks.items():
+            if task.status != TaskStatus.PENDING:
+                continue
+            failed_deps = [
+                dep for dep in task.dependencies
+                if self.tasks[dep].status in {TaskStatus.FAILED, TaskStatus.SKIPPED}
+            ]
+            if failed_deps:
+                task.status = TaskStatus.SKIPPED
+                task.error = RuntimeError(f"Skipped because dependencies failed: {', '.join(failed_deps)}")
+                task.end_time = time.time()
+                skipped += 1
+                logger.warning(f"Task '{name}' skipped because dependencies failed: {failed_deps}")
+        return skipped
     
     def _get_context(self) -> Dict[str, Any]:
         """Get current pipeline context (results from all completed tasks)"""
-        return {
+        context = dict(self.initial_context)
+        context.update({
             name: task.result
             for name, task in self.tasks.items()
             if task.status == TaskStatus.COMPLETED
-        }
+        })
+        return context
     
     async def _run_task(self, task: PipelineTask):
         """Execute a single task"""
@@ -121,8 +141,9 @@ class PipelineDAG:
                     timeout=task.timeout
                 )
             else:
+                loop = asyncio.get_running_loop()
                 result = await asyncio.wait_for(
-                    self.loop.run_in_executor(
+                    loop.run_in_executor(
                         self.executor,
                         task.func,
                         context
@@ -179,6 +200,10 @@ class PipelineDAG:
             ready_tasks = self._get_ready_tasks()
             
             if not ready_tasks:
+                skipped_count = self._skip_tasks_with_failed_dependencies()
+                if skipped_count:
+                    continue
+
                 # Check if we're done
                 incomplete = [
                     t for t in self.tasks.values()
@@ -362,14 +387,25 @@ async def vision_analysis_task(context: Dict[str, Any]) -> Dict[str, Any]:
             "materials": []
         }
     
-    # Mock implementation - would call Ollama + Qwen2-VL
-    return {
-        "has_images": True,
-        "condition_score": 7,
-        "defects": ["minor_cracks"],
-        "materials": ["marble_cladding"],
-        "listing_photo_detected": False
-    }
+    from backend.vision import get_vision_analyzer
+
+    try:
+        return await asyncio.to_thread(
+            get_vision_analyzer().analyze_sources,
+            context.get("images", []),
+        )
+    except Exception as exc:
+        logger.warning(f"Vision analysis unavailable: {exc}")
+        return {
+            "has_images": True,
+            "source": "unavailable",
+            "condition_score": None,
+            "defects": [],
+            "materials": [],
+            "listing_photo_detected": False,
+            "detections": [],
+            "failures": [{"error": str(exc)}],
+        }
 
 async def fraud_detection_task(context: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -378,15 +414,44 @@ async def fraud_detection_task(context: Dict[str, Any]) -> Dict[str, Any]:
     """
     logger.info("Fraud detection: Starting")
     
-    # Mock implementation - would run all 5 fraud layers
+    vision = context.get("vision_analysis") or {}
+    size_sanity_pass = True
+    if context.get("carpet_area") and context.get("config") == "2 BHK":
+        area = float(context.get("carpet_area") or 0)
+        size_sanity_pass = 500 <= area <= 1400
+
+    flags = []
+    for defect in vision.get("defects") or []:
+        flags.append({
+            "layer": "vision",
+            "flag": "VISUAL_DEFECT_DETECTED",
+            "severity": "medium",
+            "description": f"Vision model detected {defect}.",
+            "confidence": 0.7,
+        })
+    if not size_sanity_pass:
+        flags.append({
+            "layer": "size",
+            "flag": "SIZE_CONFIG_MISMATCH",
+            "severity": "high",
+            "description": "Carpet area is outside expected range for the submitted configuration.",
+            "confidence": 0.85,
+        })
+
+    risk_level = "low"
+    if any(flag["severity"] == "high" for flag in flags):
+        risk_level = "high"
+    elif flags:
+        risk_level = "medium"
+
     return {
         "phash_flag": False,
         "clip_similarity": 0.15,
-        "listing_photo_detected": False,
-        "size_sanity_pass": True,
+        "listing_photo_detected": bool(vision.get("listing_photo_detected")),
+        "size_sanity_pass": size_sanity_pass,
         "location_consistency": 0.92,
-        "risk_level": "low",
-        "flags": []
+        "risk_level": risk_level,
+        "flags": flags
     }
 
 async def xgboost_multiplier_task(context: Dict[str, Any]) -> Dict[str, Any]:

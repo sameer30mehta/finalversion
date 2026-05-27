@@ -103,6 +103,51 @@ export async function generateUnderwriterSummary(payload, options = {}) {
   }
 }
 
+export async function scanPropertyImage(imageUrl, options = {}) {
+  const candidateLabels = options.candidateLabels || [
+    'wall crack',
+    'ceiling crack',
+    'water seepage stain',
+    'mold or damp patch',
+    'broken tile',
+    'exposed wiring',
+    'structural damage',
+    'premium interior finish',
+    'standard residential room'
+  ];
+
+  let response;
+  try {
+    const imageResponse = await fetch(imageUrl);
+    const blob = await imageResponse.blob();
+    const formData = new FormData();
+    formData.append('file', blob, 'property-image.jpg');
+    formData.append('candidateLabels', JSON.stringify(candidateLabels));
+    if (options.threshold !== undefined) formData.append('threshold', String(options.threshold));
+    response = await fetch(`${API_BASE_URL}/api/vision/scan`, {
+      method: 'POST',
+      body: formData
+    });
+  } catch (error) {
+    response = await fetch(`${API_BASE_URL}/api/vision/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: imageUrl,
+        candidateLabels,
+        threshold: options.threshold
+      })
+    });
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || `Vision scan failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export class PropScoreAPI {
   /**
    * Health check - verify backend is running
@@ -286,9 +331,9 @@ export class PropScoreAPI {
   }
 
   /**
-   * Export report (PDF generation)
+   * Export backend audit report for stored /valuate runs.
    */
-  static async generateReport(valuationId, format = 'pdf') {
+  static async generateReport(valuationId, format = 'json') {
     try {
       const response = await fetch(
         `${API_BASE_URL}/report/${valuationId}?format=${format}`,
@@ -299,9 +344,8 @@ export class PropScoreAPI {
 
       if (format === 'pdf') {
         return await response.blob();
-      } else {
-        return await response.json();
       }
+      return await response.json();
     } catch (error) {
       console.error('Report generation error:', error);
       throw error;

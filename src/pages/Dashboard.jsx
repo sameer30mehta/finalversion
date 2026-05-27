@@ -10,12 +10,13 @@ import Stage2VerificationSection from '../components/Dashboard/Stage2Verificatio
 import HistoricalReliabilitySection from '../components/Dashboard/HistoricalReliabilitySection';
 import PortfolioRiskSection from '../components/Dashboard/PortfolioRiskSection';
 import AIUnderwriterSummarySection from '../components/Dashboard/AIUnderwriterSummarySection';
+import AuditPackSection from '../components/Dashboard/AuditPackSection';
 import CaseHeader from '../components/Dashboard/CaseHeader';
 import OverviewSection from '../components/Dashboard/OverviewSection';
 import ValuationLiquiditySection from '../components/Dashboard/ValuationLiquiditySection';
 import FinalDecisionStrip from '../components/Dashboard/FinalDecisionStrip';
 import { runValuation } from '../lib/valuationEngine';
-import { generateUnderwriterSummary } from '../lib/api';
+import { generateUnderwriterSummary, scanPropertyImage } from '../lib/api';
 
 const getStage1Payload = (payload) => payload?.normalizedPropertyProfile ? payload : payload?.stage1 || payload?.stage1Output || null;
 
@@ -178,6 +179,75 @@ const isEnhancedUpgrade = (response) => (
   Boolean(response?.summary)
 );
 
+const buildAuditExportPayload = (data, underwriterSummary) => {
+  const stage1 = data?.stage1 || {};
+  const portfolioSummary = data?.portfolioRiskSummary?.portfolioSummary || {};
+  const stage2 = data?.stage2Output || {};
+
+  return {
+    generatedAt: new Date().toISOString(),
+    reportType: 'PropScore collateral audit pack',
+    case: {
+      address: data?.caseDetails?.address || stage1?.normalizedPropertyProfile?.address,
+      asset: data?.caseDetails,
+      marketValue: data?.marketValue,
+      distressValue: data?.distressValue,
+      liquidityScore: data?.propScore,
+      confidence: data?.confidence,
+      recommendedLtv: portfolioSummary.recommendedLtv ?? data?.ltv,
+      verificationDecision: data?.verificationDecision || stage2?.decision,
+    },
+    sources: {
+      stage1: stage1?.stage1Metadata,
+      stage2: {
+        normSource: stage2?.normSource,
+        normSourceLabel: stage2?.normSourceLabel,
+        decision: stage2?.decision,
+      },
+      historical: {
+        source: data?.historicalCaseSummary?.source,
+        candidateCount: data?.historicalCaseSummary?.candidateCount,
+        displayedCount: data?.historicalCaseSummary?.displayedCount,
+        overallSignal: data?.historicalCaseSummary?.overallSignal,
+      },
+      portfolio: {
+        source: data?.portfolioRiskSummary?.source,
+        riskLevel: portfolioSummary.riskLevel,
+        score: portfolioSummary.portfolioRiskScore,
+      },
+      ai: {
+        source: underwriterSummary?.source,
+        modelUsed: underwriterSummary?.modelUsed,
+        summaryQuality: underwriterSummary?.summaryQuality,
+        fallbackUsed: underwriterSummary?.fallbackUsed,
+      },
+      vision: {
+        source: data?.visualAudit?.source,
+        imageCount: data?.rawImages?.length || 0,
+      },
+    },
+    deterministicBoundary: 'Numeric scores, value estimates, LTV adjustments, and risk flags are deterministic. AI only explains computed outputs and recommends evidence.',
+    reviewFlags: [
+      ...(stage2?.flags || []).filter((flag) => !flag?.protective),
+      ...(data?.portfolioRiskSummary?.riskFlags || []).map((flag) => ({ source: 'portfolio', text: flag })),
+    ],
+    recommendedEvidence: underwriterSummary?.summary?.recommendedEvidence || [],
+    aiSummary: underwriterSummary?.summary || null,
+  };
+};
+
+const downloadJsonFile = (filename, payload) => {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
 export default function Dashboard() {
   const [searchParams] = useSearchParams();
   const isDemo = searchParams.get('demo') === 'true';
@@ -229,34 +299,11 @@ export default function Dashboard() {
            const runCudaInference = async () => {
               setVisionStatus('scanning');
               try {
-                 let apiRes;
-                 try {
-                     // Try binary transfer first
-                     const res = await fetch(targetUrl);
-                     const blob = await res.blob();
-                     const fd = new FormData();
-                     fd.append("file", blob, "image.jpg");
-                     
-                     apiRes = await fetch("http://localhost:8000/scan", {
-                         method: "POST",
-                         body: fd
-                     });
-                 } catch (corsErr) {
-                     // If browser blocks binary extraction, send URL to Python
-                     console.warn("CORS blocked blob extraction. Sending URL to backend.");
-                     apiRes = await fetch("http://localhost:8000/scan", {
-                         method: "POST",
-                         headers: { "Content-Type": "application/json" },
-                         body: JSON.stringify({ url: targetUrl })
-                     });
-                 }
-                 
-                 const apiData = await apiRes.json();
-                 
-                 setDetectedBoxes(prev => ({ ...prev, [targetUrl]: apiData.results }));
+                 const apiData = await scanPropertyImage(targetUrl);
+                 setDetectedBoxes(prev => ({ ...prev, [targetUrl]: apiData.results || [] }));
                  setVisionStatus('idle');
               } catch (err) {
-                 console.error("CUDA Backend Offline or Failed:", err);
+                 console.error("Vision backend offline or failed:", err);
                  setVisionStatus('idle');
               }
            };
@@ -526,7 +573,13 @@ export default function Dashboard() {
       
       const results = await runValuation(pendingPayload);
       results.coordinates = targetCenter;
+      const visionDetections = {};
+      (results.visualAudit?.detectionsByImage || []).forEach((item) => {
+        const imageUrl = results.rawImages?.[item.index];
+        if (imageUrl) visionDetections[imageUrl] = item.results || [];
+      });
       
+      setDetectedBoxes(visionDetections);
       setCurrentData(results);
       setActiveTab('summary');
       setFieldDataIncluded(payloadHasImages(pendingPayload));
@@ -542,6 +595,22 @@ export default function Dashboard() {
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleExportAuditPack = () => {
+    if (!currentData) {
+      showToast('Generate a case before exporting an audit pack.', 'info');
+      return;
+    }
+
+    const payload = buildAuditExportPayload(currentData, underwriterSummary);
+    const slug = String(currentData.caseDetails?.address || 'propscore-case')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+      .slice(0, 48) || 'propscore-case';
+    downloadJsonFile(`${slug}-audit-pack.json`, payload);
+    showToast('Audit pack exported as JSON.', 'success');
   };
 
   const calculateGaugeOffset = (score) => {
@@ -648,6 +717,14 @@ export default function Dashboard() {
               <span className="material-symbols-outlined text-[18px]">add</span>
               New Case
             </button>
+            <button
+              onClick={handleExportAuditPack}
+              disabled={!currentData}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span className="material-symbols-outlined text-[18px]">download</span>
+              Audit Pack
+            </button>
           </div>
         </header>
 
@@ -700,6 +777,7 @@ export default function Dashboard() {
                     { id: 'valuation', label: 'Valuation', icon: 'payments' },
                     { id: 'history', label: 'Historical Cases', icon: 'history' },
                     { id: 'portfolio', label: 'Portfolio Risk', icon: 'account_balance' },
+                    { id: 'audit', label: 'Audit Pack', icon: 'fact_check' },
                     {
                       id: 'ai',
                       label: 'AI Brief',
@@ -757,6 +835,13 @@ export default function Dashboard() {
                 {activeTab === 'history' && <HistoricalReliabilitySection historicalCaseSummary={currentData.historicalCaseSummary} />}
 
                 {activeTab === 'portfolio' && <PortfolioRiskSection portfolioRiskSummary={currentData.portfolioRiskSummary} />}
+
+                {activeTab === 'audit' && (
+                  <AuditPackSection
+                    data={currentData}
+                    underwriterSummary={underwriterSummary}
+                  />
+                )}
 
                 {activeTab === 'ai' && (
                   <AIUnderwriterSummarySection

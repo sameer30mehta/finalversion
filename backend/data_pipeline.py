@@ -55,7 +55,7 @@ class DataPipeline:
         
         # Try IGRS scrape
         if not circle_rates:
-            circle_rates = await self._scrape_igrs_circle_rates()
+            circle_rates = self._scrape_igrs_circle_rates()
         
         # Fallback to CSV
         if not circle_rates and source_file:
@@ -105,7 +105,7 @@ class DataPipeline:
             logger.error(f"Failed to load circle rates CSV: {e}")
             return {}
     
-    async def _scrape_igrs_circle_rates(self) -> Dict[Tuple, float]:
+    def _scrape_igrs_circle_rates(self) -> Dict[Tuple, float]:
         """Scrape circle rates from IGRS websites"""
         logger.warning("IGRS scraping not implemented - returning empty")
         return {}

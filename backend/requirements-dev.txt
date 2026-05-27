@@ -16,3 +16,6 @@ pandas
 pillow
 imagehash
 joblib
+transformers
+torch
+torchvision

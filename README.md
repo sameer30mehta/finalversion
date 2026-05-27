@@ -92,8 +92,8 @@ Ollama does **not** calculate valuation, anomaly score, suspicion score, confide
 Run commands from the project root:
 
 ```powershell
-git clone https://github.com/sameer30mehta/Agentic-Collateral-Valuation-Engine.git
-cd Agentic-Collateral-Valuation-Engine
+git clone https://github.com/sameer30mehta/demo_tensor.git
+cd demo_tensor
 ```
 
 Create and activate a Python virtual environment:
@@ -140,6 +140,8 @@ Open the Vite URL shown in the terminal, usually `http://127.0.0.1:5173`.
 ## Ollama Setup
 
 Ollama is optional for deterministic scoring but required for local AI underwriter summaries.
+
+If Ollama is not already running, start the Ollama app or run `ollama serve` in a separate terminal first.
 
 Optional D-drive model location:
 

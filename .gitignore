@@ -6,6 +6,7 @@ dist/
 dist-ssr/
 .vite/
 *.tsbuildinfo
+coverage/
 
 # Python environments and caches
 .venv/
@@ -32,6 +33,7 @@ htmlcov/
 backend/.env
 backend/.env.*
 !backend/.env.example
+.python-version
 
 # Local data, databases, and runtime artifacts
 data/
@@ -39,6 +41,9 @@ backend/data/
 *.sqlite
 *.sqlite3
 *.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 D:/PropScore/
 logs/
 uploads/
@@ -48,6 +53,10 @@ models/
 backend/models/
 backend/indexes/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Large or generated ML artifacts
 *.pkl

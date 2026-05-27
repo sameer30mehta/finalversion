@@ -5,7 +5,7 @@ import { assignCoarseBucket, assignMicroMarketBucket, extractHyperlocalContext }
 import { runAnomalyPipeline } from './anomalyEngine';
 import { adaptStage1ForValuation, isStage1Output } from './stage1Engine';
 import { buildHistoricalCaseSummary } from './historicalReliabilityEngine';
-import { resolvePortfolioConcentrationFromBackend } from './api';
+import { resolvePortfolioConcentrationFromBackend, scanPropertyImage } from './api';
 
 const isKnownOptional = (value) => Boolean(value && value !== 'not_provided');
 
@@ -41,6 +41,64 @@ function unavailablePortfolioRiskSummary() {
       ltvPenaltyPct: 0,
       seniorReviewRequired: false
     }
+  };
+}
+
+async function runVisionAudit(rawImages = []) {
+  if (!rawImages.length) {
+    return {
+      source: 'no_images',
+      conditionScore: 6.0,
+      conditionFindings: 'No images uploaded. Adopting locality average.',
+      qualityFindings: 'No interior imagery provided.',
+      featuresFindings: 'Cannot verify feature count without imagery.',
+      detectionsByImage: []
+    };
+  }
+
+  const settled = await Promise.allSettled(rawImages.slice(0, 3).map((imageUrl) => scanPropertyImage(imageUrl)));
+  const successful = settled
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value);
+
+  if (!successful.length) {
+    return {
+      source: 'unavailable',
+      conditionScore: 6.0,
+      conditionFindings: 'Vision model scan was unavailable. Manual visual verification is required.',
+      qualityFindings: 'Image quality and finish classification unavailable.',
+      featuresFindings: 'No object detections could be produced from uploaded imagery.',
+      detectionsByImage: [],
+      failures: settled
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason?.message || 'Vision scan failed')
+    };
+  }
+
+  const allDetections = successful.flatMap((scan) => scan.results || []);
+  const conditionScores = successful
+    .map((scan) => Number(scan.conditionScore))
+    .filter(Number.isFinite);
+  const avgCondition = conditionScores.length
+    ? conditionScores.reduce((sum, value) => sum + value, 0) / conditionScores.length
+    : 7;
+  const mediumOrHigh = allDetections.filter((item) => ['medium', 'high'].includes(item.severity));
+
+  return {
+    source: 'owlvit',
+    model: successful[0]?.model,
+    device: successful[0]?.device,
+    conditionScore: Number(avgCondition.toFixed(1)),
+    conditionFindings: mediumOrHigh.length
+      ? `${mediumOrHigh.length} visual risk marker(s) detected by OWL-ViT. Review boxes in the visual audit.`
+      : 'No high-confidence structural damage markers detected by OWL-ViT.',
+    qualityFindings: successful.find((scan) => scan.qualityFindings)?.qualityFindings || 'Finish quality signals processed from uploaded images.',
+    featuresFindings: `${allDetections.length} object detection(s) passed the configured threshold across uploaded images.`,
+    detectionsByImage: successful.map((scan, index) => ({
+      index,
+      results: scan.results || [],
+      conditionScore: scan.conditionScore
+    }))
   };
 }
 
@@ -138,6 +196,11 @@ export const runValuation = async (payload) => {
   let hasImages = false;
   if (enrich.images?.exterior) { confidence += 0.08; hasImages = true; }
   if (enrich.images?.interior) { confidence += 0.07; hasImages = true; }
+  const visionAudit = await runVisionAudit(enrich.rawImages || []);
+  if (visionAudit.source === 'owlvit' && Number.isFinite(visionAudit.conditionScore)) {
+    if (visionAudit.conditionScore < 5.5) confidence -= 0.08;
+    else if (visionAudit.conditionScore >= 8) confidence += 0.03;
+  }
   
   confidence = Math.min(confidence, 0.90);
 
@@ -303,12 +366,7 @@ export const runValuation = async (payload) => {
     drivers: keyDrivers.length > 0 ? keyDrivers : [{name: "Standard Config", impact: "0%", positive: true}],
     risks: riskFlags.length > 0 ? riskFlags.map(r => ({ text: r.text || r.explanation || r.title, severity: r.severity, ...r })) : [{text: "Standard local competition", severity: "low"}],
     ltv: Math.round(100 * (1 - distressDiscount - 0.1)),
-    visualAudit: {
-      conditionScore: hasImages ? 8.2 : 6.0,
-      conditionFindings: hasImages ? "Visible minor wear detected in images. No structural cracks." : "No images uploaded. Adopting locality average.",
-      qualityFindings: hasImages ? "Finishes appear standard to premium from visual scans." : "No interior imagery provided.",
-      featuresFindings: hasImages ? "No virtual staging detected. Room parameters verified." : "Cannot verify feature count without imagery."
-    },
+    visualAudit: visionAudit,
     rawImages: enrich.rawImages || [],
 
     // ─── New: Intelligence pipeline outputs ───

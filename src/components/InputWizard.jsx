@@ -147,10 +147,18 @@ export default function InputWizard({ onSubmit, onCancel }) {
     setShowDropdown(false);
   };
 
-  const handleFileDrop = (e) => {
+  const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const handleFileDrop = async (e) => {
     e.preventDefault();
     const files = Array.from(e.dataTransfer ? e.dataTransfer.files : e.target.files);
-    const newImages = files.map((file) => URL.createObjectURL(file));
+    const imageFiles = files.filter((file) => file.type.startsWith('image/')).slice(0, 5);
+    const newImages = await Promise.all(imageFiles.map(readFileAsDataUrl));
     setImages((prev) => [...prev, ...newImages].slice(0, 5));
   };
 
