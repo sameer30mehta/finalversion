@@ -2,16 +2,15 @@
 
 Copy-paste PowerShell checks for the FastAPI backend.
 
-Start backend first:
+Start backend first (relies on `.env` for paths/models — see `.env.example`):
 
 ```powershell
-$env:SQLITE_DB_PATH="D:/PropScore/data/propscore.sqlite"
-$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
-$env:OLLAMA_MODEL="qwen2.5:7b"
-$env:OLLAMA_FALLBACK_MODEL="llama3.2:3b"
-$env:OLLAMA_FAST_MODEL="llama3.2:3b"
-$env:OLLAMA_TIMEOUT_SECONDS="150"
-$env:OLLAMA_FAST_TIMEOUT_SECONDS="120"
+python -m uvicorn backend.main:app --reload --port 8000
+```
+
+If you want one-off debug logs without editing `.env`:
+
+```powershell
 $env:LLM_DEBUG="true"
 python -m uvicorn backend.main:app --reload --port 8000
 ```

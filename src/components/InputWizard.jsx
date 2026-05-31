@@ -17,6 +17,10 @@ function isValidCoordinatePair(lat, lon) {
     && parsedLon >= -180 && parsedLon <= 180;
 }
 
+// Shared input field style. Keeps every input/select in this wizard visually consistent.
+const FIELD_BASE = "w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800";
+const FIELD_DISABLED = `${FIELD_BASE} disabled:opacity-50`;
+
 export default function InputWizard({ onSubmit, onCancel }) {
   const [step, setStep] = useState(1);
 
@@ -213,8 +217,8 @@ export default function InputWizard({ onSubmit, onCancel }) {
           <div className="mt-auto relative z-10">
             <div className="p-3 bg-white/5 rounded-xl border border-white/10 mb-3">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[10px] text-white/70 font-bold uppercase tracking-wider">Data Completeness</p>
-                <span className="text-[10px] font-mono text-indigo-300">{Math.round(completenessScore * 100)}%</span>
+                <p className="text-xs text-white/70 font-bold uppercase tracking-wider">Data Completeness</p>
+                <span className="text-xs font-mono text-indigo-300">{Math.round(completenessScore * 100)}%</span>
               </div>
               <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
                 <div
@@ -224,7 +228,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
               </div>
               <div className="flex flex-wrap gap-1 mt-2">
                 {Object.values(fieldStatus).map((field, idx) => (
-                  <span key={idx} className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold ${
+                  <span key={idx} className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
                     field.filled ? 'bg-emerald-500/20 text-emerald-300' : field.mandatory ? 'bg-red-500/20 text-red-300' : 'bg-white/5 text-white/30'
                   }`}>
                     {field.filled ? 'OK' : field.mandatory ? '!' : '-'} {field.label}
@@ -237,7 +241,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
               <p className="text-xs text-white/80 flex items-center gap-2 font-bold uppercase tracking-wider mb-1">
                 <span className="material-symbols-outlined text-[14px] text-amber-400">shield</span> Stage 1 Contract
               </p>
-              <p className="text-[11px] text-white/60 leading-tight">Required intake is normalized before valuation agents consume the case.</p>
+              <p className="text-xs text-white/60 leading-tight">Required intake is normalized before valuation agents consume the case.</p>
             </div>
           </div>
         </div>
@@ -301,7 +305,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                       type="number"
                       value={lat}
                       onChange={(e) => setLat(e.target.value)}
-                      className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800"
+                      className={FIELD_BASE}
                       placeholder="19.1136"
                     />
                   </div>
@@ -311,7 +315,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                       type="number"
                       value={lon}
                       onChange={(e) => setLon(e.target.value)}
-                      className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800"
+                      className={FIELD_BASE}
                       placeholder="72.8697"
                     />
                   </div>
@@ -338,7 +342,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                 <div className="grid grid-cols-2 gap-5">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Property Type</label>
-                    <select value={type} onChange={(e) => setType(e.target.value)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800">
+                    <select value={type} onChange={(e) => setType(e.target.value)} className={FIELD_BASE}>
                       <option>Apartment</option>
                       <option>Villa</option>
                       <option>Commercial</option>
@@ -347,7 +351,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Property Subtype</label>
-                    <select value={propertySubtype} onChange={(e) => setPropertySubtype(e.target.value)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800">
+                    <select value={propertySubtype} onChange={(e) => setPropertySubtype(e.target.value)} className={FIELD_BASE}>
                       {subtypeOptions.map((option) => (
                         <option key={option}>{option}</option>
                       ))}
@@ -358,7 +362,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                 <div className="grid grid-cols-2 gap-5">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Configuration</label>
-                    <select value={config} onChange={(e) => setConfig(e.target.value)} disabled={type === 'Plot'} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 text-slate-800">
+                    <select value={config} onChange={(e) => setConfig(e.target.value)} disabled={type === 'Plot'} className={FIELD_DISABLED}>
                       <option>1 BHK</option>
                       <option>2 BHK</option>
                       <option>3 BHK</option>
@@ -373,7 +377,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                       value={floor}
                       onChange={(e) => setFloor(e.target.value)}
                       disabled={type !== 'Apartment'}
-                      className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 text-slate-800"
+                      className={FIELD_DISABLED}
                     />
                   </div>
                 </div>
@@ -394,7 +398,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                             key={key}
                             type="button"
                             onClick={() => setAreaUnit(key)}
-                            className={`px-3 py-2 text-[11px] font-bold transition-colors ${
+                            className={`px-3 py-2 text-xs font-bold transition-colors ${
                               areaUnit === key ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50'
                             }`}
                           >
@@ -404,7 +408,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                       </div>
                     </div>
                     {areaUnit !== 'sqft' && (
-                      <p className="text-[10px] text-indigo-600 mt-1 font-mono">= {normalizedSize.standardizedSizeSqft || 0} sqft normalized</p>
+                      <p className="text-xs text-indigo-600 mt-1 font-mono">= {normalizedSize.standardizedSizeSqft || 0} sqft normalized</p>
                     )}
                   </div>
 
@@ -416,11 +420,11 @@ export default function InputWizard({ onSubmit, onCancel }) {
                       type="text"
                       value={age}
                       onChange={(e) => setAge(e.target.value)}
-                      className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800"
+                      className={FIELD_BASE}
                       placeholder="e.g. 12 or 5-10"
                     />
                     {ageBucket.ageBucket !== 'Unknown' && (
-                      <span className={`inline-block mt-2 text-[10px] font-bold px-2.5 py-1 rounded-full ${
+                      <span className={`inline-block mt-2 text-xs font-bold px-2.5 py-1 rounded-full ${
                         ageBucket.ageBucket === 'New' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
                         ageBucket.ageBucket === 'Mid-age' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
                         'bg-red-50 text-red-600 border border-red-200'
@@ -438,7 +442,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                 <div className="grid grid-cols-2 gap-5">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Legal Status</label>
-                    <select value={legalStatus} onChange={(e) => setLegalStatus(e.target.value)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800">
+                    <select value={legalStatus} onChange={(e) => setLegalStatus(e.target.value)} className={FIELD_BASE}>
                       <option value="">Not Provided</option>
                       <option value="clear">Clear Title (Freehold)</option>
                       <option value="lease">Leasehold</option>
@@ -447,7 +451,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                   </div>
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Title Clarity</label>
-                    <select value={titleClarity} onChange={(e) => setTitleClarity(e.target.value)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800">
+                    <select value={titleClarity} onChange={(e) => setTitleClarity(e.target.value)} className={FIELD_BASE}>
                       <option value="">Not Provided</option>
                       <option value="verified">Verified</option>
                       <option value="partial">Partial Documents</option>
@@ -459,7 +463,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                 <div className="grid grid-cols-2 gap-5">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Occupancy</label>
-                    <select value={occupancy} onChange={(e) => setOccupancy(e.target.value)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800">
+                    <select value={occupancy} onChange={(e) => setOccupancy(e.target.value)} className={FIELD_BASE}>
                       <option value="">Not Provided</option>
                       <option value="owner">Owner Occupied</option>
                       <option value="rented">Rented</option>
@@ -472,7 +476,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
                       type="number"
                       value={rentalAmount}
                       onChange={(e) => setRentalAmount(e.target.value)}
-                      className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none shadow-sm focus:ring-2 focus:ring-indigo-500 text-slate-800"
+                      className={FIELD_BASE}
                       placeholder="Monthly rent if leased"
                     />
                   </div>

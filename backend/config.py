@@ -30,16 +30,21 @@ def env_int(name: str, default: int) -> int:
         return default
 
 class Settings(BaseSettings):
-    # Database
+    # Database — portable defaults. Both engines share ./data/propscore.sqlite by
+    # default; teammate can override either independently.
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        # Default to a local SQLite file for easy local development
-        "sqlite:///./propscore.db"
+        "sqlite:///./data/propscore.sqlite",
     )
-    
-    # Ollama
+
+    # Ollama — accept the new OLLAMA_PRIMARY_MODEL name (preferred) and fall
+    # back to the legacy OLLAMA_MODEL.
     OLLAMA_BASE_URL: str = normalize_loopback_url(os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"))
-    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    OLLAMA_MODEL: str = (
+        os.getenv("OLLAMA_PRIMARY_MODEL")
+        or os.getenv("OLLAMA_MODEL")
+        or "qwen2.5:7b"
+    )
     OLLAMA_FALLBACK_MODEL: str = os.getenv("OLLAMA_FALLBACK_MODEL", "llama3.2:3b")
     OLLAMA_FAST_MODEL: str = os.getenv("OLLAMA_FAST_MODEL", "llama3.2:3b")
     OLLAMA_TIMEOUT_SECONDS: int = env_int("OLLAMA_TIMEOUT_SECONDS", 150)
@@ -72,6 +77,10 @@ class Settings(BaseSettings):
     ENABLE_PARALLEL_INFERENCE: bool = True
     MAX_WORKERS: int = 4
     REQUEST_TIMEOUT: int = 60
+
+    # Hyperlocal Event Intelligence toggles (default ON; safe to flip OFF).
+    ENABLE_LIVE_LOCALITY_SCAN: bool = env_bool("ENABLE_LIVE_LOCALITY_SCAN", True)
+    ENABLE_LOCALITY_CACHE: bool = env_bool("ENABLE_LOCALITY_CACHE", True)
     MAX_REQUEST_BYTES: int = env_int("MAX_REQUEST_BYTES", 6 * 1024 * 1024)
     RATE_LIMIT_PER_MINUTE: int = env_int("RATE_LIMIT_PER_MINUTE", 120)
     

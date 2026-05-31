@@ -44,8 +44,10 @@ backend/data/
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite-journal
-D:/PropScore/
 logs/
+.cache/
+.local/
+.playwright-cache/
 uploads/
 backend/uploads/
 backend/tmp/

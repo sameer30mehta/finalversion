@@ -68,6 +68,30 @@ export async function resolvePortfolioConcentrationFromBackend(currentCase) {
   }
 }
 
+export async function resolveLocalityIntelligenceFromBackend(currentCase) {
+  const controller = new AbortController();
+  // Live scraping is bounded server-side (~8s per source × few sources, parallel-ish).
+  // Use a generous client timeout so genuine live results aren't cut off; the
+  // backend itself never crashes the response.
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/locality/live-intelligence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentCase),
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    const result = await response.json();
+    return result?.source === 'live_whitelisted_sources' ? result : null;
+  } catch (error) {
+    console.warn('Locality intelligence unavailable; section will show degraded state.', error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function generateUnderwriterSummary(payload, options = {}) {
   const requestBody = {
     ...payload,
@@ -101,6 +125,33 @@ export async function generateUnderwriterSummary(payload, options = {}) {
       summary: null
     };
   }
+}
+
+export async function scanImageFile(file, options = {}) {
+  const candidateLabels = options.candidateLabels || [
+    'wall crack',
+    'large wall crack',
+    'damp wall',
+    'seepage',
+    'water stain',
+    'damaged plaster',
+    'broken wall',
+    'fire damage',
+    'severe visible damage'
+  ];
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('candidateLabels', JSON.stringify(candidateLabels));
+  if (options.threshold !== undefined) formData.append('threshold', String(options.threshold));
+  const response = await fetch(`${API_BASE_URL}/api/vision/scan`, {
+    method: 'POST',
+    body: formData
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `Vision scan failed: ${response.status}`);
+  }
+  return response.json();
 }
 
 export async function scanPropertyImage(imageUrl, options = {}) {

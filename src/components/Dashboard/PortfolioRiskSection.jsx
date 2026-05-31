@@ -44,7 +44,7 @@ function displayValue(value) {
 function SummaryMetric({ label, value }) {
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">{label}</p>
+      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">{label}</p>
       <p className="text-xl font-mono font-bold text-slate-800">{value}</p>
     </div>
   );
@@ -52,7 +52,7 @@ function SummaryMetric({ label, value }) {
 
 function SignalBadge({ signal }) {
   return (
-    <span className={`px-2 py-1 rounded-md text-[9px] font-bold uppercase tracking-widest border ${SIGNAL_CLASS[signal] || SIGNAL_CLASS.Unavailable}`}>
+    <span className={`px-2 py-1 rounded-md text-xs font-bold uppercase tracking-widest border ${SIGNAL_CLASS[signal] || SIGNAL_CLASS.Unavailable}`}>
       {displayValue(signal)}
     </span>
   );
@@ -71,7 +71,7 @@ function RiskLensTable({ riskLenses }) {
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-50">
       <table className="min-w-[920px] w-full text-left">
         <thead className="bg-white border-b border-slate-200">
-          <tr className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <tr className="text-xs font-bold uppercase tracking-wider text-slate-400">
             <th className="px-4 py-3 w-[24%]">Risk lens</th>
             <th className="px-4 py-3 w-[20%] border-l border-slate-100">Current book</th>
             <th className="px-4 py-3 w-[20%] border-l border-slate-100">After this case</th>
@@ -84,15 +84,15 @@ function RiskLensTable({ riskLenses }) {
             <tr key={lens.id} className="border-b border-slate-100 last:border-b-0 text-[12px] align-top">
               <td className="px-4 py-3">
                 <p className="font-bold text-slate-700">{lens.label}</p>
-                <p className="text-[11px] text-slate-500 font-medium mt-1">{lens.explanation}</p>
+                <p className="text-xs text-slate-500 font-medium mt-1">{lens.explanation}</p>
               </td>
               <td className="px-4 py-3 border-l border-slate-100 text-slate-600 font-medium">
                 <p>{formatCurrency(lens.currentExposure)}</p>
-                <p className="text-[10px] text-slate-400 mt-1">{formatPercent(lens.currentShare)}</p>
+                <p className="text-xs text-slate-400 mt-1">{formatPercent(lens.currentShare)}</p>
               </td>
               <td className="px-4 py-3 border-l border-slate-100 text-slate-600 font-medium">
                 <p>{formatCurrency(lens.postLoanExposure)}</p>
-                <p className="text-[10px] text-slate-400 mt-1">{formatPercent(lens.postLoanShare)}</p>
+                <p className="text-xs text-slate-400 mt-1">{formatPercent(lens.postLoanShare)}</p>
               </td>
               <td className="px-4 py-3 border-l border-slate-100 text-slate-600 font-medium">
                 {formatPercent(lens.policyCap)}
@@ -100,7 +100,7 @@ function RiskLensTable({ riskLenses }) {
               <td className="px-4 py-3 border-l border-slate-100">
                 <SignalBadge signal={lens.signal} />
                 {lens.delinquencyRate !== undefined && (
-                  <p className="text-[10px] text-slate-500 font-semibold mt-2">
+                  <p className="text-xs text-slate-500 font-semibold mt-2">
                     Delq {formatPercent(lens.delinquencyRate)} / Default {formatPercent(lens.defaultRate)}
                   </p>
                 )}
@@ -128,17 +128,17 @@ export default function PortfolioRiskSection({ portfolioRiskSummary }) {
           <div className="flex items-center gap-2 mb-1">
             <span className="material-symbols-outlined text-indigo-500">account_balance</span>
             <h3 className="text-lg font-headline font-bold text-slate-800">Portfolio-Aware Collateral Risk</h3>
-            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">PORTFOLIO_LAYER</span>
+            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded font-mono border border-indigo-100">PORTFOLIO_LAYER</span>
           </div>
           <p className="text-sm text-slate-500 font-medium">
             How much of this risk do we already hold? This layer checks whether approving this case would increase exposure to the same micro-market, asset type, or low-liquidity collateral cluster.
           </p>
         </div>
         <div className="flex flex-wrap lg:justify-end gap-2">
-          <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-widest border bg-slate-50 text-slate-600 border-slate-200">
+          <span className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-widest border bg-slate-50 text-slate-600 border-slate-200">
             Source: {source}
           </span>
-          <span className={`px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-widest border ${RISK_CLASS[summary.riskLevel] || RISK_CLASS.Unavailable}`}>
+          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-widest border ${RISK_CLASS[summary.riskLevel] || RISK_CLASS.Unavailable}`}>
             Risk level: {displayValue(summary.riskLevel)}
           </span>
         </div>
@@ -160,7 +160,7 @@ export default function PortfolioRiskSection({ portfolioRiskSummary }) {
       </div>
 
       <div className="mb-5 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
-        <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-wider mb-1">Review recommendation</p>
+        <p className="text-xs text-indigo-500 font-bold uppercase tracking-wider mb-1">Review recommendation</p>
         <p className="text-sm font-semibold text-indigo-900">{displayValue(summary.reviewRecommendation)}</p>
       </div>
 
@@ -178,7 +178,7 @@ export default function PortfolioRiskSection({ portfolioRiskSummary }) {
           <h4 className="text-sm font-bold text-slate-800 mb-3 border-b border-slate-100 pb-2">Portfolio Risk Flags</h4>
           <div className="flex flex-wrap gap-2">
             {portfolioRiskSummary.riskFlags.map((flag) => (
-              <span key={flag} className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-[11px] font-bold text-slate-600">
+              <span key={flag} className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-xs font-bold text-slate-600">
                 {flag}
               </span>
             ))}

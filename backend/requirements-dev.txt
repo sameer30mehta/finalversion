@@ -19,3 +19,6 @@ joblib
 transformers
 torch
 torchvision
+
+# Hyperlocal Event Intelligence — official-source scraping.
+beautifulsoup4

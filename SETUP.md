@@ -1,17 +1,18 @@
 # Setup Guide
 
-Practical Windows PowerShell setup for the PropScore hackathon demo.
+Practical setup for the PropScore demo. Paths are repo-relative; the backend
+auto-creates `./data/` on first run.
 
 ## Prerequisites
 
 - Python 3.11+
-- Node.js and npm
+- Node.js + npm
 - Git
-- Ollama, if you want local AI underwriter summaries
+- Ollama (optional — system falls back to rule-based if not running)
 
-## 1. Backend Setup
+## 1. Backend dependencies
 
-Run from the repository root:
+From the repository root:
 
 ```powershell
 python -m venv .venv
@@ -20,61 +21,52 @@ python -m pip install --upgrade pip
 pip install -r backend/requirements-dev.txt
 ```
 
-## 2. Seed SQLite
+Mac/Linux equivalent:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r backend/requirements-dev.txt
+```
+
+## 2. Configure environment
 
 ```powershell
-New-Item -ItemType Directory -Force D:\PropScore\data
-$env:SQLITE_DB_PATH="D:/PropScore/data/propscore.sqlite"
+cp .env.example .env             # one consolidated env file is enough
+cp backend/.env.example backend/.env   # optional — backend-only overrides
+```
+All paths default to `./data/propscore.sqlite` — nothing to edit unless you
+want a non-default location.
+
+## 3. Seed SQLite
+
+```powershell
 python backend/db/seed_sqlite.py
 ```
 
-Expected result: a local SQLite database at `D:/PropScore/data/propscore.sqlite`.
+Creates `./data/propscore.sqlite` with the locality / market / historical /
+portfolio reference tables. The backend also auto-seeds the locality event
+cache on startup with the curated demo events for Andheri East.
 
-## 3. Start Backend
+## 4. Start the backend
 
 ```powershell
-$env:SQLITE_DB_PATH="D:/PropScore/data/propscore.sqlite"
-$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
-$env:OLLAMA_MODEL="qwen2.5:7b"
-$env:OLLAMA_FALLBACK_MODEL="llama3.2:3b"
-$env:OLLAMA_FAST_MODEL="llama3.2:3b"
-$env:OLLAMA_TIMEOUT_SECONDS="150"
-$env:OLLAMA_FAST_TIMEOUT_SECONDS="120"
-$env:LLM_DEBUG="false"
 python -m uvicorn backend.main:app --reload --port 8000
 ```
 
 Health check:
-
 ```powershell
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/health"
+Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-## 4. Frontend Setup
-
-Open a second PowerShell window:
+## 5. Start the frontend (second terminal)
 
 ```powershell
 npm install
-$env:VITE_API_BASE_URL="http://127.0.0.1:8000"
 npm run dev
 ```
+Open the printed Vite URL (usually `http://127.0.0.1:5173`).
 
-Open the Vite URL shown in the terminal, usually:
-
-```text
-http://127.0.0.1:5173
-```
-
-## 5. Ollama Setup
-
-Optional: place Ollama model files on the D drive.
-
-```powershell
-setx OLLAMA_MODELS "D:\PropScore\models\ollama"
-```
-
-Restart PowerShell after running `setx`, then pull models:
+## 6. Ollama (optional)
 
 ```powershell
 ollama pull qwen2.5:7b
@@ -82,56 +74,28 @@ ollama pull llama3.2:3b
 ollama list
 ```
 
-Notes:
-
-- `qwen2.5:7b` is the primary enhanced explanation model.
+- `qwen2.5:7b` is the enhanced explanation model.
 - `llama3.2:3b` is the fast/fallback explanation model.
-- Deterministic valuation and scoring do not require Ollama.
+- Deterministic valuation and scoring do **not** require Ollama.
 
-## 6. Troubleshooting
-
-### Backend package missing
-
+If your laptop is RAM-constrained, you can disable vision (frees ~1–2 GB):
 ```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -r backend/requirements-dev.txt
+$env:ENABLE_VISION_MODEL="false"
+```
+and/or run with the smaller fast model only:
+```powershell
+$env:OLLAMA_PRIMARY_MODEL="llama3.2:3b"
 ```
 
-### Backend import issues
+## 7. Troubleshooting
 
-- Make sure you are in the repository root containing `backend/main.py`.
-- Start with `python -m uvicorn backend.main:app --reload --port 8000`.
+| Symptom | Fix |
+|---|---|
+| Backend import error | Confirm `pwd` is the repo root; reactivate venv |
+| Frontend can't reach backend | `$env:VITE_API_BASE_URL="http://127.0.0.1:8000"` then restart `npm run dev` |
+| Ollama "couldn't allocate buffer" | Switch to `llama3.2:3b` only, free RAM, disable vision model |
+| Live RSS sources fail | Cache fallback fires automatically; the dashboard badges the run as "Cache" |
+| `localhost` quirks | Use `127.0.0.1` everywhere; backend normalises both |
 
-### Frontend cannot reach backend
-
-- Confirm backend is running at `http://127.0.0.1:8000`.
-- Set frontend API URL:
-
-```powershell
-$env:VITE_API_BASE_URL="http://127.0.0.1:8000"
-```
-
-Use `127.0.0.1` instead of `localhost` if the browser or Ollama behaves inconsistently.
-
-### SQLite DB path missing
-
-```powershell
-New-Item -ItemType Directory -Force D:\PropScore\data
-$env:SQLITE_DB_PATH="D:/PropScore/data/propscore.sqlite"
-python backend/db/seed_sqlite.py
-```
-
-### Ollama timeout
-
-- Keep `OLLAMA_TIMEOUT_SECONDS=150`.
-- Keep `OLLAMA_FAST_TIMEOUT_SECONDS=120`.
-- `qwen2.5:7b` can be slow on low-RAM machines.
-- The backend supports `llama3.2:3b` fast/fallback mode and a rule-based fallback.
-
-### qwen too slow
-
-Use the dashboard normally. The frontend asks for the fast `llama3.2:3b` summary first and only attempts the enhanced `qwen2.5:7b` summary afterward.
-
-### Docker
-
-Docker is optional for this submission. Local Windows setup is the recommended demo path. If using Docker, mount the SQLite path and keep Ollama running on the host machine.
+See `SETUP_FOR_TEAMMATE.md` for the absolute-minimum first-clone walkthrough,
+and `DEMO_RUNBOOK.md` for the live-demo script.

@@ -104,9 +104,16 @@ export default function AuditPackSection({ data, underwriterSummary }) {
     },
     {
       label: 'Visual evidence',
-      value: compactSourceLabel(data.visualAudit?.source),
-      sublabel: data.rawImages?.length ? `${data.rawImages.length} uploaded image(s)` : 'No uploaded image evidence',
-      source: data.visualAudit?.source,
+      value: compactSourceLabel(data.visualEvidence?.source || 'none'),
+      sublabel: (() => {
+        const ve = data.visualEvidence;
+        if (!ve || ve.packetStatus === 'not_uploaded') return 'No visual evidence packet uploaded';
+        if (ve.packetStatus === 'incomplete') return `Packet incomplete · ${(ve.missingCategories || []).length} required missing`;
+        const effects = ve.deterministicEffects || {};
+        const route = effects.inspectionRoute && effects.inspectionRoute !== 'none' ? ` · ${effects.inspectionRoute.replace(/_/g, ' ')}` : '';
+        return `Packet complete · evidence ${effects.evidenceStrength || 'none'}${route}`;
+      })(),
+      source: data.visualEvidence?.source || 'none',
     },
   ];
 
@@ -134,7 +141,7 @@ export default function AuditPackSection({ data, underwriterSummary }) {
           {sourceCards.map((item) => (
             <div key={item.label} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="mb-2 flex items-center justify-between gap-3">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
                 <Badge tone={sourceTone(item.source)}>{compactSourceLabel(item.source)}</Badge>
               </div>
               <p className="text-sm font-extrabold leading-snug text-slate-900">{cleanText(item.value)}</p>

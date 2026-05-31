@@ -98,10 +98,10 @@ export default function LandingHub({ onInitialize }) {
                { val: "Days", label: "Liquidation Velocity", tag: "Actionable" }
              ].map((output, i) => (
                <motion.div key={i} variants={revealUp} className="flex flex-col">
-                 <span className="text-[10px] font-bold border border-indigo-200 bg-indigo-50 py-1 px-3 rounded-full self-start mb-6 text-indigo-700 uppercase tracking-widest">{output.tag}</span>
+                 <span className="text-xs font-bold border border-indigo-200 bg-indigo-50 py-1 px-3 rounded-full self-start mb-6 text-indigo-700 uppercase tracking-widest">{output.tag}</span>
                  <h3 className="text-4xl font-headline font-black text-slate-900 mb-4 tracking-tighter">{output.val}</h3>
                  <p className="text-sm font-bold text-slate-600">{output.label}</p>
-                 <div className="w-full h-[1px] bg-slate-200 mt-6"></div>
+                 <div className="w-full h-px bg-slate-200 mt-6"></div>
                </motion.div>
              ))}
           </div>

@@ -47,7 +47,7 @@ function titleCase(value) {
 function ScoreCard({ label, value, suffix = '' }) {
   return (
     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-2">{label}</p>
+      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2">{label}</p>
       <p className="text-2xl font-mono text-slate-800 font-bold">{value}{suffix}</p>
     </div>
   );
@@ -56,7 +56,7 @@ function ScoreCard({ label, value, suffix = '' }) {
 function ReferenceMetric({ label, value }) {
   return (
     <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">{label}</p>
+      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">{label}</p>
       <p className="text-sm font-semibold text-slate-800">{displayValue(value)}</p>
     </div>
   );
@@ -64,7 +64,7 @@ function ReferenceMetric({ label, value }) {
 
 function StatusBadge({ status }) {
   return (
-    <span className={`px-2 py-1 rounded-md text-[9px] font-bold uppercase tracking-widest border ${STATUS_CLASS[status] || STATUS_CLASS.warning}`}>
+    <span className={`px-2 py-1 rounded-md text-xs font-bold uppercase tracking-widest border ${STATUS_CLASS[status] || STATUS_CLASS.warning}`}>
       {titleCase(status)}
     </span>
   );
@@ -77,10 +77,10 @@ function ReferenceCell({ reference, detail }) {
         <span className="font-semibold text-slate-700">{displayValue(reference)}</span>
         {detail && (
           <details>
-            <summary className="list-none cursor-pointer w-5 h-5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-200 text-[11px] font-bold flex items-center justify-center">
+            <summary className="list-none cursor-pointer w-5 h-5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-200 text-xs font-bold flex items-center justify-center">
               ?
             </summary>
-            <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-medium leading-snug text-slate-600 shadow-sm">
+            <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-xs font-medium leading-snug text-slate-600 shadow-sm">
               {detail}
             </div>
           </details>
@@ -127,7 +127,7 @@ function EvaluationTable({ rows }) {
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-50">
       <table className="min-w-[920px] w-full text-left">
         <thead className="bg-white border-b border-slate-200">
-          <tr className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <tr className="text-xs font-bold uppercase tracking-wider text-slate-400">
             <th className="px-4 py-3 w-[22%]">What we checked</th>
             <th className="px-4 py-3 w-[27%] border-l border-slate-100">Your property</th>
             <th className="px-4 py-3 w-[31%] border-l border-slate-100">What is common here</th>
@@ -145,7 +145,7 @@ function EvaluationTable({ rows }) {
               <td className="px-4 py-3 border-l border-slate-100">
                 <div className="flex flex-col items-start gap-2">
                   <StatusBadge status={row.result} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
                     {displayValue(row.sourceBucket)}
                   </span>
                 </div>
@@ -181,10 +181,10 @@ export default function Stage2VerificationSection({ stage2Output }) {
           <p className="text-sm text-slate-500 font-medium mt-1">Pre-valuation trust screening with local expectations and decision impact.</p>
         </div>
         <div className="flex flex-wrap md:justify-end gap-2">
-          <span className="px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-600 border-slate-200">
+          <span className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-600 border-slate-200">
             Norm source: {normSourceLabel}
           </span>
-          <span className={`px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-widest border w-max ${DECISION_CLASS[stage2Output.decision] || DECISION_CLASS.ACCEPT_WARNING}`}>
+          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-widest border w-max ${DECISION_CLASS[stage2Output.decision] || DECISION_CLASS.ACCEPT_WARNING}`}>
             {DECISION_LABEL[stage2Output.decision] || stage2Output.decision}
           </span>
         </div>
@@ -222,7 +222,7 @@ export default function Stage2VerificationSection({ stage2Output }) {
       <div className="mb-5">
         <h4 className="text-sm font-bold text-slate-800 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">
           Professional Verification Table
-          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">STAGE_2_GATE</span>
+          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded font-mono border border-indigo-100">STAGE_2_GATE</span>
         </h4>
         <EvaluationTable rows={evaluationRows} />
       </div>
@@ -243,10 +243,10 @@ export default function Stage2VerificationSection({ stage2Output }) {
                 </div>
                 <p className="text-[12px] text-slate-600 leading-snug">{flag.explanation}</p>
                 <div className="flex flex-wrap gap-2 mt-3">
-                  <span className="px-1.5 py-0.5 text-[9px] uppercase font-bold tracking-widest rounded bg-white text-slate-500 border border-slate-200">
+                  <span className="px-1.5 py-0.5 text-xs uppercase font-bold tracking-widest rounded bg-white text-slate-500 border border-slate-200">
                     {titleCase(flag.sourceBucket)}
                   </span>
-                  <span className="px-1.5 py-0.5 text-[9px] uppercase font-bold tracking-widest rounded bg-white text-slate-500 border border-slate-200">
+                  <span className="px-1.5 py-0.5 text-xs uppercase font-bold tracking-widest rounded bg-white text-slate-500 border border-slate-200">
                     {displayValue(flag.evidence)}
                   </span>
                 </div>

@@ -102,6 +102,17 @@ class PortfolioConcentrationRiskRequest(BaseModel):
     liquidityTier: Optional[str] = Field(default=None, max_length=80)
     liquidityIndex: Optional[float] = Field(default=None, ge=0, le=1)
 
+class LocalityIntelligenceRequest(BaseModel):
+    """Locality context to run Hyperlocal Event Intelligence against."""
+    locality: str = Field(..., min_length=2, max_length=160)
+    microMarketId: Optional[str] = Field(default=None, max_length=80)
+    city: Optional[str] = Field(default=None, max_length=80)
+    zone: Optional[str] = Field(default=None, max_length=120)
+    lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    lon: Optional[float] = Field(default=None, ge=-180, le=180)
+    aliases: Optional[List[str]] = Field(default=None)
+
+
 class UnderwriterSummaryRequest(BaseModel):
     """Structured deterministic outputs to explain with a local LLM."""
     caseId: Optional[str] = None
@@ -1197,6 +1208,62 @@ def build_portfolio_risk_flags(risk_lenses: list[Dict[str, Any]]) -> list[str]:
     return flags or ["Similar collateral exposure remains within policy cap."]
 
 # ============================================================================
+# Hyperlocal Event Intelligence
+# ============================================================================
+
+@app.post("/api/locality/live-intelligence")
+async def resolve_locality_intelligence(request: LocalityIntelligenceRequest):
+    """Run the whitelisted-source locality intelligence pipeline.
+
+    Always returns a safe payload, even if every source fails. Core valuation
+    pipeline must never be broken by this endpoint.
+    """
+    from backend.locality_intelligence.pipeline import run_locality_intelligence
+
+    try:
+        result = await run_locality_intelligence(
+            locality=request.locality,
+            micro_market_id=request.microMarketId,
+            city=request.city,
+            zone=request.zone,
+            lat=request.lat,
+            lon=request.lon,
+            aliases=request.aliases or [],
+        )
+        return result
+    except Exception as exc:
+        logger.warning(f"Locality intelligence endpoint failed: {exc}", exc_info=True)
+        return {
+            "source": "live_whitelisted_sources",
+            "status": "live_unavailable_no_cached_events",
+            "microMarketId": request.microMarketId,
+            "locality": request.locality,
+            "eventsFound": 0,
+            "acceptedEvents": 0,
+            "rejectedEvents": 0,
+            "growthSignals": 0,
+            "riskSignals": 0,
+            "neutralSignals": 0,
+            "liquidityDelta": 0,
+            "marketabilityDelta": 0,
+            "confidenceDelta": 0,
+            "timeToLiquidateDeltaPct": 0,
+            "manualReviewRequired": False,
+            "inspectionRoute": "none",
+            "riskFlags": [],
+            "events": [],
+            "auditTrail": [{
+                "ruleId": "NEWS_PIPELINE_ERROR",
+                "source": "endpoint",
+                "input": str(exc)[:120],
+                "effect": "all deltas = 0",
+                "explanation": "Locality intelligence pipeline error; core valuation unaffected.",
+            }],
+            "sourceStatuses": [],
+        }
+
+
+# ============================================================================
 # AI Underwriter Summary
 # ============================================================================
 
@@ -1714,7 +1781,16 @@ async def startup_event():
             logger.info(f"SQLite reference database seeded: {counts}")
     except Exception as exc:
         logger.warning(f"SQLite reference database initialization skipped: {exc}")
-    
+
+    # Seed the locality_event_cache with demo events when empty (idempotent).
+    try:
+        from backend.locality_intelligence.seed import seed_locality_events_if_empty
+        seeded = seed_locality_events_if_empty()
+        if seeded:
+            logger.info(f"Locality event cache seeded with {seeded} demo events")
+    except Exception as exc:
+        logger.warning(f"Locality event cache seeding skipped: {exc}")
+
     logger.info("Database tables created")
 
 if __name__ == "__main__":

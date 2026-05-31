@@ -1,15 +1,18 @@
 import React, { useEffect, useState, useRef } from 'react';
 
+// Progress messages describe the deterministic pipeline stages that run after this
+// loading view. They intentionally avoid asserting specific findings or numbers,
+// since the real values are computed by the engine and shown in the dashboard.
 const LOG_MESSAGES = [
-  { agent: 'Coordinator', msg: 'Initializing PropScore Multi-Agent Engine v2.4...', delay: 0 },
-  { agent: 'Geospatial Agent', msg: 'Querying OpenStreetMap Node for {location}...', delay: 400 },
-  { agent: 'Geospatial Agent', msg: 'Found 14 infrastructure anchors within 500m radius. Indexing proximity score.', delay: 1200 },
-  { agent: 'Market Agent', msg: 'Accessing Circle Rate Database. Base set to ₹15,000/sqft.', delay: 1800 },
-  { agent: 'Vision Agent', msg: 'Unpacking field verification images. Initiating CNN structural scan.', delay: 2500, conditional: true },
-  { agent: 'Vision Agent', msg: 'No visible structural compromise detected. Finishes identified as Standard.', delay: 3600, conditional: true },
-  { agent: 'Legal Agent', msg: 'Cross-verifying title status. No active encumbrances logged.', delay: 4100 },
-  { agent: 'Risk Agent', msg: 'Synthesizing inputs. Calculating 1-year distress probability.', delay: 5000 },
-  { agent: 'Coordinator', msg: 'Consensus reached. Finalizing PropScore ledger.', delay: 6000 }
+  { agent: 'Coordinator', msg: 'Initializing PropScore collateral pipeline...', delay: 0 },
+  { agent: 'Geospatial Agent', msg: 'Resolving location and nearby infrastructure for {location}...', delay: 400 },
+  { agent: 'Geospatial Agent', msg: 'Indexing hyperlocal proximity and access signals...', delay: 1200 },
+  { agent: 'Market Agent', msg: 'Resolving circle-rate reference and local market norms...', delay: 1800 },
+  { agent: 'Vision Agent', msg: 'Running local vision scan on uploaded images...', delay: 2500, conditional: true },
+  { agent: 'Vision Agent', msg: 'Scoring visual condition from detected markers...', delay: 3600, conditional: true },
+  { agent: 'Legal Agent', msg: 'Checking declared legal / title status...', delay: 4100 },
+  { agent: 'Risk Agent', msg: 'Synthesizing anomaly, valuation, and liquidity signals...', delay: 5000 },
+  { agent: 'Coordinator', msg: 'Finalizing deterministic collateral assessment...', delay: 6000 }
 ];
 
 export default function AgentTerminal({ isActive, locationName = "Target", hasImages = false, externalLog = null, blockComplete = false, onComplete }) {

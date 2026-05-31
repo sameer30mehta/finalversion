@@ -80,13 +80,13 @@ export default function OverviewSection({ data, underwriterSummary, isUnderwrite
   return (
     <div className="space-y-6">
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="rounded-xl border border-slate-900 bg-[#111827] p-6 text-white shadow-xl shadow-slate-900/10">
+        <div className="rounded-xl border border-slate-900 bg-slate-900 p-6 text-white shadow-xl shadow-slate-900/10">
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <Badge tone={decisionTone(decision)}>{data.verificationDecision?.label || cleanText(decision)}</Badge>
             <Badge tone="slate">DSS {formatNumber(scores.dataSufficiencyScore ?? data.dataSufficiency, 2)}</Badge>
             <Badge tone="slate">Suspicion {scores.suspicionScore ?? data.anomalyResults?.suspicionScore ?? 'NA'}/100</Badge>
           </div>
-          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-200/80">Underwriter decision memo</p>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-200/80">Underwriter decision memo</p>
           <h3 className="mt-3 max-w-3xl text-2xl font-extrabold tracking-tight text-white">
             {data.verificationDecision?.label || cleanText(decision)}
           </h3>
@@ -95,15 +95,15 @@ export default function OverviewSection({ data, underwriterSummary, isUnderwrite
           </p>
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="rounded-lg border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recommended LTV</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Recommended LTV</p>
               <p className="mt-2 text-2xl font-extrabold text-white">{recommendedLtv(data)}</p>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Liquidity</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Liquidity</p>
               <p className="mt-2 text-2xl font-extrabold text-white">{data.propScore ?? 'NA'}/100</p>
             </div>
             <div className="rounded-lg border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Confidence</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Confidence</p>
               <p className="mt-2 text-2xl font-extrabold text-white">{formatNumber(data.confidence, 2)}</p>
             </div>
           </div>
@@ -111,7 +111,7 @@ export default function OverviewSection({ data, underwriterSummary, isUnderwrite
 
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Immediate next step</p>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Immediate next step</p>
             <p className="mt-3 text-xl font-extrabold text-slate-950">
               {evidenceItems[0] || 'Complete evidence review'}
             </p>
@@ -120,7 +120,7 @@ export default function OverviewSection({ data, underwriterSummary, isUnderwrite
             </p>
           </div>
           <div className="rounded-xl border border-cyan-100 bg-cyan-50 p-5">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-700">AI brief</p>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">AI brief</p>
             <p className="mt-3 text-sm font-semibold leading-7 text-slate-900">
               {isUnderwriterSummaryLoading
                 ? 'Fast AI summary is generating in the background.'

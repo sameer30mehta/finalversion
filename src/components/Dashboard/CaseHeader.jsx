@@ -51,19 +51,19 @@ export default function CaseHeader({ data, aiStatus }) {
   ];
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-900 bg-[#111827] shadow-xl shadow-slate-900/10">
+    <div className="overflow-hidden rounded-xl border border-slate-900 bg-slate-900 shadow-xl shadow-slate-900/10">
       <div className="p-5 text-white md:p-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="rounded-md border border-white/15 bg-white/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-200">
+              <span className="rounded-md border border-white/15 bg-white/10 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-slate-200">
                 Collateral case
               </span>
-              <span className="rounded-md border border-amber-300/30 bg-amber-300/15 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-amber-100">
+              <span className="rounded-md border border-amber-300/30 bg-amber-300/15 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-amber-100">
                 {decisionLabel}
               </span>
               {aiStatus && (
-                <span className="rounded-md border border-cyan-300/25 bg-cyan-300/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-cyan-100">
+                <span className="rounded-md border border-cyan-300/25 bg-cyan-300/10 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-cyan-100">
                   AI {aiStatus}
                 </span>
               )}
@@ -79,7 +79,7 @@ export default function CaseHeader({ data, aiStatus }) {
           </div>
 
           <div className="rounded-lg border border-white/10 bg-white/[0.06] p-4 xl:min-w-[320px]">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Recommended action</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Recommended action</p>
             <p className="mt-2 text-xl font-bold text-white">{getPrimaryAction(data)}</p>
             <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-300">
               Numeric outputs are deterministic. AI only explains evidence and review wording.
@@ -92,7 +92,7 @@ export default function CaseHeader({ data, aiStatus }) {
         {headerMetrics.map((metric) => (
           <div key={metric.label} className="border-b border-slate-200 p-4 md:border-r xl:border-b-0">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{metric.label}</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{metric.label}</p>
               <span className="material-symbols-outlined text-[18px] text-slate-400">{metric.icon}</span>
             </div>
             <p className="break-words text-lg font-extrabold leading-tight text-slate-950">{cleanText(metric.value)}</p>

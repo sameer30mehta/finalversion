@@ -13,7 +13,7 @@ export default function XAIBubble({ title, children }) {
         className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-200 hover:scale-110 active:scale-95 transition-all duration-200 cursor-pointer border border-indigo-200/50 shadow-sm flex-shrink-0"
         title="How is this calculated?"
       >
-        <span className="text-[10px] font-black leading-none select-none">?</span>
+        <span className="text-xs font-black leading-none select-none">?</span>
       </button>
 
       {/* Portal-rendered glassmorphic modal — escapes all parent overflow/stacking */}
@@ -47,7 +47,7 @@ export default function XAIBubble({ title, children }) {
                 {/* Header */}
                 <div className="px-6 pt-5 pb-3 flex items-start justify-between">
                   <div>
-                    <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-indigo-600 mb-1 block">Explainability</span>
+                    <span className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600 mb-1 block">Explainability</span>
                     <h3 className="text-lg font-headline font-bold text-slate-900">{title}</h3>
                   </div>
                   <button

@@ -5,7 +5,11 @@ import { assignCoarseBucket, assignMicroMarketBucket, extractHyperlocalContext }
 import { runAnomalyPipeline } from './anomalyEngine';
 import { adaptStage1ForValuation, isStage1Output } from './stage1Engine';
 import { buildHistoricalCaseSummary } from './historicalReliabilityEngine';
-import { resolvePortfolioConcentrationFromBackend, scanPropertyImage } from './api';
+import {
+  resolveLocalityIntelligenceFromBackend,
+  resolvePortfolioConcentrationFromBackend,
+  scanPropertyImage,
+} from './api';
 
 const isKnownOptional = (value) => Boolean(value && value !== 'not_provided');
 
@@ -196,12 +200,12 @@ export const runValuation = async (payload) => {
   let hasImages = false;
   if (enrich.images?.exterior) { confidence += 0.08; hasImages = true; }
   if (enrich.images?.interior) { confidence += 0.07; hasImages = true; }
+  // NOTE: the wizard-side `runVisionAudit` is kept only for display compatibility.
+  // It must NOT alter confidence — the only auditable image-evidence path is the
+  // separate Visual Collateral Evidence layer (visualEvidenceEngine.js), applied
+  // with hard caps at the Dashboard level. See ABSOLUTE CORE RULES.
   const visionAudit = await runVisionAudit(enrich.rawImages || []);
-  if (visionAudit.source === 'owlvit' && Number.isFinite(visionAudit.conditionScore)) {
-    if (visionAudit.conditionScore < 5.5) confidence -= 0.08;
-    else if (visionAudit.conditionScore >= 8) confidence += 0.03;
-  }
-  
+
   confidence = Math.min(confidence, 0.90);
 
   let buffer = 0.08;
@@ -338,6 +342,25 @@ export const runValuation = async (payload) => {
     liquidityIndex: stage1?.marketNorms?.liquidityIndex ?? microMarket?.norms?.liquidityIndex
   }) || unavailablePortfolioRiskSummary();
 
+  // Hyperlocal Event Intelligence — runs after Stage 1 context, AFTER existing
+  // SQLite-backed engines. Soft-fails to null → dashboard shows degraded state.
+  // Never alters base marketValue / circleRate / historical comps.
+  const localityIntelligence = await resolveLocalityIntelligenceFromBackend({
+    locality: stage1?.bucketAssignment?.microMarketBucket?.label
+      || stage1?.normalizedPropertyProfile?.address?.split(',')[0]?.trim()
+      || inputs.location,
+    microMarketId: stage1?.bucketAssignment?.microMarketBucket?.id || microMarket?.bucketId,
+    city: 'Mumbai',
+    zone: stage1?.bucketAssignment?.coarseBucket?.label || coarseBucket?.adminRegion,
+    lat,
+    lon,
+    aliases: [],
+  });
+  // Apply bounded confidence overlay from accepted locality events (already capped server-side).
+  if (localityIntelligence && Number.isFinite(localityIntelligence.confidenceDelta)) {
+    confidence = Math.min(0.95, Math.max(0.25, confidence + localityIntelligence.confidenceDelta));
+  }
+
   return {
     caseDetails: {
       address: inputs.location,
@@ -378,6 +401,7 @@ export const runValuation = async (payload) => {
     verificationDecision: anomalyResults.decision,
     stage2Output,
     historicalCaseSummary,
+    localityIntelligence,
     portfolioRiskSummary,
     fieldCompleteness: inputs.fieldCompleteness || null,
     stage1,

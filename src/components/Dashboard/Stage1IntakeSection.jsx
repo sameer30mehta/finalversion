@@ -18,7 +18,7 @@ function formatConfidence(value) {
 function InfoCell({ label, value }) {
   return (
     <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
-      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{label}</p>
+      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{label}</p>
       <p className="text-sm font-medium text-slate-800 break-words">{displayValue(value)}</p>
     </div>
   );
@@ -29,12 +29,12 @@ function HelpTip({ text }) {
     <span className="relative inline-flex group">
       <button
         type="button"
-        className="w-5 h-5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-200 text-[11px] font-bold flex items-center justify-center"
+        className="w-5 h-5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-200 text-xs font-bold flex items-center justify-center"
         aria-label={text}
       >
         ?
       </button>
-      <span className="pointer-events-none absolute right-0 top-7 z-20 hidden w-64 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-medium leading-snug text-slate-600 shadow-xl group-hover:block group-focus-within:block">
+      <span className="pointer-events-none absolute right-0 top-7 z-20 hidden w-64 rounded-lg border border-slate-200 bg-white p-3 text-xs font-medium leading-snug text-slate-600 shadow-xl group-hover:block group-focus-within:block">
         {text}
       </span>
     </span>
@@ -51,7 +51,7 @@ function BucketCard({ icon, title, badge, helpText, items }) {
           </div>
           <div>
             <h4 className="text-sm font-bold text-slate-900">{title}</h4>
-            <span className="inline-block mt-1 px-1.5 py-0.5 bg-white text-slate-500 text-[9px] rounded font-mono border border-slate-200">{displayValue(badge)}</span>
+            <span className="inline-block mt-1 px-1.5 py-0.5 bg-white text-slate-500 text-xs rounded font-mono border border-slate-200">{displayValue(badge)}</span>
           </div>
         </div>
         <HelpTip text={helpText} />
@@ -59,8 +59,8 @@ function BucketCard({ icon, title, badge, helpText, items }) {
       <div className="grid grid-cols-1 gap-3">
         {items.map((item) => (
           <div key={item.label}>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{item.label}</p>
-            <p className="text-[13px] text-slate-700 font-semibold leading-snug">{displayValue(item.value)}</p>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{item.label}</p>
+            <p className="text-sm text-slate-700 font-semibold leading-snug">{displayValue(item.value)}</p>
           </div>
         ))}
       </div>
@@ -90,17 +90,17 @@ export default function Stage1IntakeSection({ stage1 }) {
           <p className="text-sm text-slate-500 font-medium mt-1">Normalized profile and SQLite-backed spatial bucket assignment for downstream verification.</p>
         </div>
         <div className="flex flex-wrap md:justify-end gap-2">
-          <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest border w-max ${
+          <span className={`px-2 py-1 rounded-md text-xs font-bold uppercase tracking-widest border w-max ${
             profile.completenessStatus?.mandatoryComplete
               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
               : 'bg-red-50 text-red-600 border-red-200'
           }`}>
             {profile.completenessStatus?.mandatoryComplete ? 'Mandatory Complete' : `Missing: ${missingFields.join(', ')}`}
           </span>
-          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-600 border-slate-200">
+          <span className="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-600 border-slate-200">
             Context source: {sourceLabel}
           </span>
-          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest border w-max bg-indigo-50 text-indigo-700 border-indigo-100">
+          <span className="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-widest border w-max bg-indigo-50 text-indigo-700 border-indigo-100">
             Location match: {formatConfidence(metadata.locationMatchConfidence)}
           </span>
         </div>
@@ -128,7 +128,7 @@ export default function Stage1IntakeSection({ stage1 }) {
         <div>
           <h4 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">
             Bucket Assignment
-            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">STAGE_1_CORE</span>
+            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded font-mono border border-indigo-100">STAGE_1_CORE</span>
           </h4>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <BucketCard

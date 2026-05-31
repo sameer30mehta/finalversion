@@ -33,7 +33,7 @@ function StatusBadge({ children, tone = 'slate' }) {
   }[tone];
 
   return (
-    <span className={`px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-widest border ${toneClass}`}>
+    <span className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-widest border ${toneClass}`}>
       {children}
     </span>
   );
@@ -72,7 +72,7 @@ function LoadingState() {
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-indigo-500">psychology</span>
           <h3 className="text-lg font-headline font-bold text-slate-800">AI Underwriter Summary</h3>
-          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">LLM_EXPLANATION</span>
+          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded font-mono border border-indigo-100">LLM_EXPLANATION</span>
         </div>
         <StatusBadge tone="indigo">Generating</StatusBadge>
       </div>
@@ -92,11 +92,11 @@ function DebugAttempts({ debug }) {
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-3">LLM attempt trace</p>
+      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-3">LLM attempt trace</p>
       <div className="space-y-2">
         {debug.attempts.map((attempt, index) => (
           <div key={`${attempt.model}-${index}`} className="flex flex-col md:flex-row md:items-start gap-2 md:gap-4 text-[12px] font-semibold text-slate-600">
-            <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest border w-max ${
+            <span className={`px-2 py-1 rounded-md text-xs font-bold uppercase tracking-widest border w-max ${
               attempt.status === 'success'
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 : 'bg-red-50 text-red-700 border-red-200'
@@ -133,7 +133,7 @@ function EnhancementStatus({ enhancementState }) {
 
   return (
     <div className={`rounded-xl border p-4 ${toneClass}`}>
-      <p className="text-[10px] font-bold uppercase tracking-wider mb-1">{label}</p>
+      <p className="text-xs font-bold uppercase tracking-wider mb-1">{label}</p>
       <p className="text-[12px] font-semibold leading-snug">{enhancementState.message}</p>
     </div>
   );
@@ -155,7 +155,7 @@ function DeveloperDiagnostics({ summaryResponse, enhancementState }) {
       </button>
       {open && (
         <div className="mt-3 space-y-3">
-          <div className="grid grid-cols-1 gap-x-4 gap-y-1 rounded-lg bg-slate-50 p-3 font-mono text-[11px] text-slate-600 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-1 rounded-lg bg-slate-50 p-3 font-mono text-xs text-slate-600 md:grid-cols-2">
             <span>apiBaseUrl: {API_BASE_URL}</span>
             <span>source: {displayValue(summaryResponse?.source)}</span>
             <span>modelUsed: {displayValue(summaryResponse?.modelUsed)}</span>
@@ -184,7 +184,7 @@ export default function AIUnderwriterSummarySection({ summaryResponse, isLoading
           <div className="flex items-center gap-2 mb-1">
             <span className="material-symbols-outlined text-indigo-500">psychology</span>
             <h3 className="text-lg font-headline font-bold text-slate-800">AI Underwriter Summary</h3>
-            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded font-mono border border-indigo-100">LLM_EXPLANATION</span>
+            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded font-mono border border-indigo-100">LLM_EXPLANATION</span>
           </div>
           <p className="text-sm text-slate-500 font-medium">
             AI summary explains system outputs. Numeric values, scores, LTV, and flags are computed by deterministic engines.
@@ -230,7 +230,7 @@ export default function AIUnderwriterSummarySection({ summaryResponse, isLoading
           <EnhancementStatus enhancementState={enhancementState} />
 
           <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-5">
-            <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-wider mb-1">Executive summary</p>
+            <p className="text-xs text-indigo-500 font-bold uppercase tracking-wider mb-1">Executive summary</p>
             <p className="text-sm font-semibold text-indigo-950 leading-relaxed">{displayValue(summary.executiveSummary)}</p>
           </div>
 
@@ -256,22 +256,22 @@ export default function AIUnderwriterSummarySection({ summaryResponse, isLoading
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Review route</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">Review route</p>
               <p className="text-sm font-bold text-slate-800">{displayValue(summary.reviewRoute)}</p>
             </div>
             <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Suggested lender action</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">Suggested lender action</p>
               <p className="text-sm font-bold text-slate-800">{displayValue(summary.suggestedLenderAction)}</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Confidence narrative</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">Confidence narrative</p>
               <p className="text-[12px] font-semibold text-slate-600 leading-snug">{displayValue(summary.confidenceNarrative)}</p>
             </div>
             <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Portfolio narrative</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">Portfolio narrative</p>
               <p className="text-[12px] font-semibold text-slate-600 leading-snug">{displayValue(summary.portfolioNarrative)}</p>
             </div>
           </div>

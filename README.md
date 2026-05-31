@@ -87,6 +87,122 @@ Ollama is used for explanation, underwriter summaries, review-route wording, and
 
 Ollama does **not** calculate valuation, anomaly score, suspicion score, confidence score, portfolio risk score, LTV, or risk flags. All numeric scores, value estimates, LTV adjustments, and flags are computed by deterministic engines.
 
+## Hyperlocal Event Intelligence (Whitelisted Source Feed)
+
+PropScore consumes a live, whitelisted official-source feed of locality-level infrastructure, regulatory, and weather events, converts each into a structured event object, and applies bounded deterministic effects to **liquidity, marketability, confidence, time-to-liquidate, risk flags, and manual review routing only**. This layer **never directly moves base market value, circle rate, historical comps, or final score**. The LLM is an extraction layer only; the deterministic rule engine decides the numeric impact.
+
+Source whitelist (`backend/locality_intelligence/source_registry.py`) has two tiers:
+
+**Official sources (verification / trust layer, trust 0.90–0.98):**
+- **MMRDA** (`mmrda.maharashtra.gov.in`) — live HTML scrape of press releases.
+- **NDMA Sachet** (`sachet.ndma.gov.in`) — live HTML scrape of alerts.
+- **MahaRERA** (`maharera.maharashtra.gov.in`) — registered, JS-rendered; cache-served via stub fetcher pending headless-browser integration.
+- **IMD** (`mausam.imd.gov.in`) — registered, image-heavy / region tabs; cache-served via stub fetcher.
+
+**Reputed media (live discovery layer, trust 0.65–0.80, RSS preferred):**
+- **Hindustan Times — Mumbai**, **The Hindu — Mumbai**, **Indian Express — Mumbai**, **Times of India — Mumbai**, **Economic Times — Realty**, **Moneycontrol — Real Estate**.
+
+**Local media (trust 0.45–0.60):**
+- **Mid-Day — Mumbai**.
+
+**Corroboration engine** (`backend/locality_intelligence/corroboration.py`): after validation, events are bucketed by `(eventType, direction, project|locality, ~30-day window)` and each group receives a `corroborationStatus` + `corroborationWeight`:
+
+| status | meaning | weight |
+|---|---|---|
+| `official_plus_media` | official source + at least one media source | 1.10 |
+| `official_only` | only an official source | 1.00 |
+| `media_corroborated` | two or more independent reputed media | 0.72 |
+| `media_only` | one reputed media source | 0.40 |
+| `local_media_only` | one local-media source | 0.25 |
+| `unconfirmed` / `rejected` | weak / failed validation | 0.00 |
+
+The scoring formula now multiplies by this weight:
+
+```
+eventWeight = sourceTrust × localityRelevance × confidence × severity
+              × recencyWeight × projectMaturityWeight × corroborationWeight
+```
+
+Single-source media events are tagged `isWatchlist=true`. They contribute their (already dampened) deltas but **do not trigger manual review** unless the event is in a severe-risk type list (`revoked_project`, `rera_project_risk`, `litigation_redevelopment_risk`, `environmental_restriction`, `flood_warning`, `infrastructure_delay`). The dashboard renders watchlist signals in their own labeled panel so they don't visually rank as high-trust.
+
+**Cross-rule** (in `Dashboard.jsx::augmentedData`): when **media reports waterlogging / flood / heavy rain** AND **visualEvidence has an accepted seepage / dampness / water-stain signal**, the system fires `NEWS_VISUAL_CROSS_WATER_001` — triggers `technical_valuer_inspection` and applies a bounded confidence penalty (-0.02). Recorded in the audit trail.
+
+**Cache-fallback dampener + asymmetric caps.** To prevent cached-only intelligence from looking as strong as a live official-confirmed scan, two policies stack:
+
+1. **Per-event cache dampener** — when the run is serving from cache (`status: live_unavailable_cached`), each accepted event's scored deltas are multiplied by a tier-aware factor before aggregation:
+
+   | corroboration status | cache multiplier |
+   |---|---|
+   | `official_only` / `official_plus_media` | 0.75 |
+   | `media_corroborated` | 0.40 |
+   | `media_only` | 0.40 |
+   | `local_media_only` | 0.20 (severe-risk only; otherwise 0.00 — watchlist only) |
+
+   Logged once per cached run as `NEWS_CACHE_DAMPENER_001`.
+
+2. **Asymmetric positive caps** — positive upside is held tighter than downside risk. The **tight** positive ceiling is liquidity/marketability **+0.05** and TTL improvement **-0.07**. The wider ceiling (liquidity/marketability **+0.08**, TTL **-0.10**) is **only** unlocked when the current run has at least one **live** `official_only` or `official_plus_media` event. Negative-risk caps are unchanged (-0.08 / -0.04 / +0.15). Each clamp emits `NEWS_POSITIVE_CAP_001` or `NEWS_NEGATIVE_CAP_001`.
+
+3. **Positive-watchlist suppressor.** A single `media_only` or `local_media_only` positive-direction event has its already-corroboration-dampened scaled deltas further halved (×0.5) so it contributes meaningful watchlist context but doesn't meaningfully move liquidity / marketability.
+
+The dashboard section shows the run mode (`Live run` / `Cache run`), the cap band (`Relaxed` / `Tight`), the pre-cap aggregate deltas, and a permanent policy line: *"Cached events are dampened. Live official-confirmed events receive stronger weighting."*
+
+URL boundary: `validate_url_against_whitelist` rejects any URL whose host is not a suffix-match of an enabled `allowedDomain` AND whose resolved IP is not public (private / loopback / link-local / multicast / reserved blocked). Redirects to non-whitelisted hosts are blocked. Per-request size cap and timeout are enforced. One source failing never kills the others.
+
+LLM role (`backend/locality_intelligence/llm_extractor.py`): calls the existing local Ollama setup (qwen → llama → rule-based fallback) with a strict-JSON prompt that requires an evidence quote drawn from the source text. The evidence validator rejects events where the quote isn't found in the original scrape, or where `localityRelevance < 0.55` or `confidence < 0.60`.
+
+Deterministic scoring (`backend/locality_intelligence/scoring.py`):
+
+```
+eventWeight = sourceTrust × localityRelevance × confidence × severity
+              × recencyWeight × projectMaturityWeight
+```
+
+Per-event caps are per `eventType` (e.g. `metro_connectivity` peaks at liquidity +0.06, marketability +0.05, confidence +0.02, TTL −8%). Global aggregate caps clamp the total: liquidity / marketability ∈ ±0.08, confidence ∈ ±0.04, TTL ∈ −10%…+15%.
+
+Cache + fallback (`backend/locality_intelligence/cache.py`, `locality_event_cache` table):
+
+1. Live scrape attempted first.
+2. Accepted events persisted to the SQLite cache.
+3. If live yields no accepted events for a locality, the cache is read and events are re-scored (caps re-applied).
+4. If neither path yields anything, the response is a safe zero-impact payload — core valuation continues unaffected.
+
+For demo reliability the cache is seeded on startup with curated public-domain events for Andheri East (`backend/locality_intelligence/seed.py`). The dashboard clearly badges the status as **Live scan completed**, **Live unavailable — cached**, or **No locality events available**.
+
+API: `POST /api/locality/live-intelligence`. Endpoint never raises — every failure mode returns a structured zero-impact response.
+
+UI: a dedicated **Locality Events** tab on the dashboard. Each event card shows the source, the exact evidence quote, the per-event deltas, the audit rule ID, and a link to the source URL. The decision-impact card and the AI summary payload both receive only the compact structured summary; the LLM never sees raw scraped text.
+
+## Optional Visual Collateral Evidence Layer
+
+PropScore does **not** build the secure image-capture layer. In production, images and metadata are produced upstream by the bank mobile app, borrower portal, relationship-manager / field-officer app, valuer portal, or a secure capture SDK. That upstream layer is responsible for GPS capture, timestamping, spoofing prevention, uploader role, image category assignment, and verified-capture status.
+
+PropScore consumes a standardized visual evidence packet (images + metadata) and converts it into auditable collateral evidence signals. The layer is **optional**, **deterministic-first**, and **bounded**:
+
+- **No images** → image impact is zero. Existing pipeline behaves exactly as before.
+- **Incomplete packet** (any of the 5 required categories missing) → image impact is zero; missing categories are shown.
+- **Complete packet + model unavailable / failed / timeout** → image impact is zero. UI states: *"Visual model unavailable. Image-based condition scoring skipped. Core valuation unaffected."*
+- **Complete packet + clean model pass + trusted metadata** → small bounded confidence boost (`IMG_CONF_001/002`, max +0.06).
+- **Complete packet + accepted damage / water signal** → bounded confidence penalty (max −0.05), bounded valuation modifier (max −0.05), and a manual inspection route (field officer / technical valuer / structural engineer).
+- **GPS mismatch (`IMG_META_001`)** → positive image impact is blocked; field-officer review is recommended.
+- **Every effect is hard-capped** (`IMG_CAP_001`): confidence delta ∈ [−0.05, +0.06], valuation modifier ∈ [−0.05, +0.03], liquidity modifier ∈ [−0.03, +0.02].
+
+The image model is used only as a *signal extractor*. It does not estimate property value, compute LTV, override deterministic scores, or replace valuers. Every accepted rule is recorded in the visual evidence audit trail with input, effect, and explanation.
+
+The required image categories are: **Front Exterior**, **Entrance / Nameplate / Building Identity**, **Main Interior Area**, **Kitchen / Bathroom / Utility Area**, and **Damage Evidence or No-Damage Declaration**. Optional categories include parking / common area, basement / ground floor, terrace / roof, shop frontage, and additional damage evidence. The dashboard's *Visual Evidence* tab lets you upload the packet, set metadata (uploader role, GPS status, capture verification, freshness), trigger the optional vision scan, and inspect findings, decision impact, and the full audit trace.
+
+This layer does not claim perfect damage detection, structural diagnosis, image-based valuation, or replacement of professional valuers.
+
+## Handoff Docs
+
+If you're picking this up cold, read in this order:
+
+1. **`SETUP_FOR_TEAMMATE.md`** — minimum first-clone walkthrough.
+2. **`DEMO_RUNBOOK.md`** — what to click and say during the live demo.
+3. **`KNOWN_LIMITATIONS.md`** — honest scope statement.
+4. **`CONTRIBUTING_OR_HANDOFF.md`** — branch / PR / pre-push workflow.
+5. **`SETUP.md`** — fuller setup reference (Windows + Mac/Linux).
+6. **`API_TESTS.md`** — copy-paste backend smoke tests.
+
 ## Setup Instructions
 
 Run commands from the project root:
@@ -105,25 +221,21 @@ python -m pip install --upgrade pip
 python -m pip install -r backend\requirements-dev.txt
 ```
 
-Seed the local SQLite database:
+Copy the environment example (one-time):
 
 ```powershell
-New-Item -ItemType Directory -Force D:\PropScore\data
-$env:SQLITE_DB_PATH="D:/PropScore/data/propscore.sqlite"
+cp .env.example .env
+```
+
+Seed the local SQLite database (auto-creates `./data/`):
+
+```powershell
 python backend/db/seed_sqlite.py
 ```
 
-Start the backend:
+Start the backend (defaults to the values in `.env`):
 
 ```powershell
-$env:SQLITE_DB_PATH="D:/PropScore/data/propscore.sqlite"
-$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
-$env:OLLAMA_MODEL="qwen2.5:7b"
-$env:OLLAMA_FALLBACK_MODEL="llama3.2:3b"
-$env:OLLAMA_FAST_MODEL="llama3.2:3b"
-$env:OLLAMA_TIMEOUT_SECONDS="150"
-$env:OLLAMA_FAST_TIMEOUT_SECONDS="120"
-$env:LLM_DEBUG="false"
 python -m uvicorn backend.main:app --reload --port 8000
 ```
 
@@ -141,15 +253,9 @@ Open the Vite URL shown in the terminal, usually `http://127.0.0.1:5173`.
 
 Ollama is optional for deterministic scoring but required for local AI underwriter summaries.
 
-If Ollama is not already running, start the Ollama app or run `ollama serve` in a separate terminal first.
+If Ollama is not already running, start the Ollama app or run `ollama serve` in a separate terminal first. Optionally point `OLLAMA_MODELS` at a custom directory before running `ollama pull` so the model files don't fill the system drive.
 
-Optional D-drive model location:
-
-```powershell
-setx OLLAMA_MODELS "D:\PropScore\models\ollama"
-```
-
-Restart PowerShell after `setx`, then pull the models:
+Pull the models:
 
 ```powershell
 ollama pull qwen2.5:7b
@@ -164,14 +270,14 @@ ollama list
 Copy `.env.example` values into your local environment. Do not commit actual `.env` files.
 
 ```env
-SQLITE_DB_PATH=D:/PropScore/data/propscore.sqlite
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen2.5:7b
+DATA_DIR=./data
+DATABASE_URL=sqlite:///./data/propscore.sqlite
+SQLITE_DB_PATH=./data/propscore.sqlite
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_PRIMARY_MODEL=qwen2.5:7b
 OLLAMA_FALLBACK_MODEL=llama3.2:3b
-OLLAMA_FAST_MODEL=llama3.2:3b
-OLLAMA_TIMEOUT_SECONDS=150
-OLLAMA_FAST_TIMEOUT_SECONDS=120
-LLM_DEBUG=false
+ENABLE_LIVE_LOCALITY_SCAN=true
+ENABLE_LOCALITY_CACHE=true
 VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
@@ -203,6 +309,47 @@ See [API_TESTS.md](./API_TESTS.md) for copy-paste PowerShell calls.
 - `POST /api/historical/similar-cases`: Retrieve and score similar historical collateral cases.
 - `POST /api/portfolio/concentration-risk`: Assess portfolio concentration and recommended LTV impact.
 - `POST /api/llm/underwriter-summary`: Generate explanation-only underwriter summary with Ollama and rule-based fallback.
+
+## Optional Visual Collateral Evidence Layer
+
+PropScore consumes an optional, standardized visual evidence packet and converts it into auditable, bounded scoring effects. PropScore does **not** build the secure camera-capture layer — in production that is owned upstream by the bank mobile app, the borrower upload portal, the relationship-manager / field-officer app, the valuer portal, or a secure capture SDK.
+
+Judge-facing line: *"Image capture is upstream. PropScore consumes a standardized visual evidence packet and converts it into auditable collateral evidence signals."*
+
+What the layer does:
+
+1. Validates packet completeness against five required image categories (front exterior, entrance / nameplate, main interior, kitchen / bath / utility, damage-or-no-damage declaration).
+2. Computes metadata trust from per-image fields the upstream layer supplies — uploaded-by role, GPS match status, capture verification, freshness.
+3. Optionally runs a pretrained zero-shot detector (the existing `/api/vision/scan` OWL-ViT endpoint) to extract basic warning signals (cracks, dampness, seepage, fire / severe damage, etc.).
+4. Converts accepted signals into deterministic capped effects via a rule engine (`src/lib/visualEvidenceEngine.js`).
+5. Produces an audit trail keyed by rule IDs (`IMG_PKT_*`, `IMG_MODEL_*`, `IMG_DMG_*`, `IMG_CONF_*`, `IMG_META_*`, `IMG_CAP_*`).
+6. Surfaces inspection routing — `field_officer_review`, `technical_valuer_inspection`, or `structural_engineer_inspection`.
+
+Hard contract — image impact is zero when any of the following hold:
+
+- No images uploaded
+- Packet incomplete (any required category missing)
+- Model unavailable, failed, or timed out
+- All detections below threshold
+
+A strong accepted signal triggers a bounded confidence penalty and a bounded valuation condition modifier, plus the appropriate manual inspection route. Hard caps (`IMG_CAP_001`):
+
+- `confidenceDelta` ∈ [-0.05, +0.06]
+- `valuationModifierPct` ∈ [-0.05, +0.03]
+- `liquidityModifierPct` ∈ [-0.03, +0.02]
+
+Clean images mainly improve confidence, not valuation. The final market-value range is never altered by image evidence; the bounded valuation modifier is shown as a separate transparent line.
+
+Demo flow:
+
+- Wizard collects property fields.
+- **Step 2 (optional)**: visual evidence overlay — upload the 5-category packet, set metadata, optionally run the vision scan, then `Continue to evaluation`.
+- Deterministic evaluation runs with the visual evidence already integrated (with caps).
+- The Visual Evidence dashboard tab remains editable for post-hoc changes; updates flow through the same lifted state with the same caps.
+
+The LLM never sees raw images. Only the compacted `visualEvidence` summary (packet status, missing categories, metadata trust, accepted concerns, capped deltas, inspection route) is passed to the underwriter-summary prompt.
+
+PropScore does not claim perfect damage detection, structural diagnosis, replacement of human valuers, or image-based property valuation.
 
 ## Known Limitations
 

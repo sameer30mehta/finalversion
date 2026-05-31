@@ -37,7 +37,7 @@ export function formatPercent(value, digits = 0) {
 
 export function Badge({ children, tone = 'slate', className = '' }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider ${toneClasses[tone] || toneClasses.slate} ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-bold uppercase tracking-wider ${toneClasses[tone] || toneClasses.slate} ${className}`}>
       {children}
     </span>
   );
@@ -79,7 +79,7 @@ export function MetricCard({ label, value, sublabel, tone = 'slate', icon }) {
   return (
     <div className={`rounded-xl border p-4 ${toneClass}`}>
       <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{label}</p>
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{label}</p>
         {icon && <span className="material-symbols-outlined text-[18px] opacity-70">{icon}</span>}
       </div>
       <p className="break-words text-xl font-bold leading-tight text-current">{cleanText(value)}</p>
@@ -91,7 +91,7 @@ export function MetricCard({ label, value, sublabel, tone = 'slate', icon }) {
 export function InfoItem({ label, value }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-      <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">{label}</p>
+      <p className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-500">{label}</p>
       <p className="break-words text-sm font-semibold leading-snug text-slate-800">{cleanText(value)}</p>
     </div>
   );
