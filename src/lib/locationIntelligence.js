@@ -120,7 +120,7 @@ export async function extractHyperlocalContext(lat, lon) {
 
   // Overpass query for transit, education, health, commercial, highways
   const query = `
-    [out:json][timeout:10];
+    [out:json][timeout:25];
     (
       nwr["railway"="station"](around:${radius},${lat},${lon});
       nwr["station"="subway"](around:${radius},${lat},${lon});
@@ -135,14 +135,29 @@ export async function extractHyperlocalContext(lat, lon) {
 
   let pois = [];
   try {
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: `data=${encodeURIComponent(query)}`
-    });
-    const data = await res.json();
+    const endpoints = [
+      'https://overpass-api.de/api/interpreter',
+      'https://lz4.overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter'
+    ];
+    let data = null;
+    let success = false;
+    
+    for (const endpoint of endpoints) {
+      if (success) break;
+      try {
+        const url = `${endpoint}?data=${encodeURIComponent(query)}`;
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        data = await res.json();
+        success = true;
+      } catch (err) {
+        // try next
+      }
+    }
+
+    if (!success || !data) throw new Error('All Overpass endpoints failed');
+    
     pois = (data.elements || []).map(el => {
       const elLat = el.lat || el.center?.lat;
       const elLon = el.lon || el.center?.lon;
@@ -157,8 +172,8 @@ export async function extractHyperlocalContext(lat, lon) {
       };
     });
   } catch (e) {
-    console.warn('Overpass API failed, using heuristic fallback:', e);
-    pois = generateFallbackPOIs(lat, lon);
+    console.warn('Overpass API failed. Will not use heuristic fallback to ensure accuracy:', e);
+    pois = [];
   }
 
   // Deduplicate by name + type, keep closest
@@ -274,17 +289,4 @@ function deduplicatePOIs(pois) {
     }
   }
   return Array.from(seen.values());
-}
-
-function generateFallbackPOIs(lat, lon) {
-  // Deterministic fallback when Overpass is unavailable
-  const seed = Math.abs(Math.floor(lat * 100 + lon * 100));
-  return [
-    { id: 1, name: 'Metro Station', type: 'transit', lat: lat + 0.003, lon: lon + 0.002, distance: 400 + (seed % 600) },
-    { id: 2, name: 'Railway Station', type: 'transit', lat: lat - 0.008, lon: lon + 0.005, distance: 800 + (seed % 1200) },
-    { id: 3, name: 'Public School', type: 'education', lat: lat + 0.004, lon: lon - 0.003, distance: 500 + (seed % 700) },
-    { id: 4, name: 'District Hospital', type: 'health', lat: lat - 0.006, lon: lon - 0.004, distance: 1000 + (seed % 1500) },
-    { id: 5, name: 'Commercial Hub', type: 'commercial', lat: lat + 0.002, lon: lon + 0.006, distance: 300 + (seed % 800) },
-    { id: 6, name: 'Highway Access', type: 'highway', lat: lat - 0.010, lon: lon + 0.008, distance: 1200 + (seed % 1000) },
-  ].map(p => ({ ...p, tags: {} }));
 }

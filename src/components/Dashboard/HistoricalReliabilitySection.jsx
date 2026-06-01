@@ -62,6 +62,38 @@ function DetailItem({ label, value }) {
   );
 }
 
+function ConfidenceBridge({ summary }) {
+  const base = Number(summary.baseConfidence);
+  const final = Number(summary.finalConfidence);
+  const adjustment = Number(summary.confidenceAdjustment);
+  if (!Number.isFinite(base) || !Number.isFinite(final)) return null;
+
+  const width = (value) => `${Math.max(0, Math.min(100, value * 100))}%`;
+  return (
+    <div className="mb-5 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wider text-indigo-600">Confidence bridge</p>
+          <p className="mt-1 text-sm font-semibold text-slate-700">Past outcomes make the current estimate more or less dependable.</p>
+        </div>
+        <span className={`rounded-md border px-2.5 py-1 text-xs font-bold ${adjustment >= 0 ? SIGNAL_CLASS.Positive : SIGNAL_CLASS.Caution}`}>
+          History {formatDelta(adjustment)}
+        </span>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <div className="mb-1 flex justify-between text-xs font-bold text-slate-500"><span>Before historical evidence</span><span>{base.toFixed(2)}</span></div>
+          <div className="h-2 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-slate-400" style={{ width: width(base) }} /></div>
+        </div>
+        <div>
+          <div className="mb-1 flex justify-between text-xs font-bold text-indigo-700"><span>After historical evidence</span><span>{final.toFixed(2)}</span></div>
+          <div className="h-2 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-indigo-500" style={{ width: width(final) }} /></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HistoricalCaseRow({ historicalCase }) {
   const impact = historicalCase.currentCaseImpact || {};
   const confidenceContribution = historicalCase.confidenceContribution ?? impact.confidenceContribution;
@@ -71,20 +103,22 @@ function HistoricalCaseRow({ historicalCase }) {
   return (
     <details className="group border border-slate-200 rounded-xl bg-white overflow-hidden">
       <summary className="list-none cursor-pointer hover:bg-slate-50 transition-colors">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_0.7fr_1.3fr_1.3fr_1fr_32px] gap-4 px-4 py-4 items-center">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1.25fr_1fr_32px] gap-4 px-4 py-4 items-center">
           <div>
             <p className="text-sm font-bold text-slate-800">{historicalCase.caseId}</p>
             <p className="text-xs text-slate-500 font-medium">{historicalCase.location}</p>
           </div>
           <div>
-            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs font-bold">
-              {historicalCase.similarityPct}% similar
-            </span>
+            <div className="mb-1 flex items-center justify-between gap-2 text-xs font-bold text-indigo-700">
+              <span>Similarity</span><span>{historicalCase.similarityPct}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, Number(historicalCase.similarityPct) || 0))}%` }} />
+            </div>
             {Number.isFinite(historicalCase.caseAgeYears) && (
               <p className="text-xs text-slate-500 font-bold mt-1">{formatAge(historicalCase.caseAgeYears)} old</p>
             )}
           </div>
-          <p className="text-[12px] text-slate-600 font-medium leading-snug">{historicalCase.matchBasis}</p>
           <p className="text-[12px] text-slate-600 font-medium leading-snug">{historicalCase.outcomeSummary}</p>
           <p className={`text-[12px] font-bold ${confidenceContribution >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
             Confidence {formatDelta(confidenceContribution)}
@@ -192,25 +226,17 @@ export default function HistoricalReliabilitySection({ historicalCaseSummary }) 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-5">
-        <SummaryMetric label="Candidate cases" value={historicalCaseSummary.candidateCount ?? historicalCaseSummary.casesFound} />
-        <SummaryMetric label="Displayed cases" value={historicalCaseSummary.displayedCount ?? historicalCaseSummary.casesFound} />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+        <SummaryMetric label="Relevant cases used" value={historicalCaseSummary.displayedCount ?? historicalCaseSummary.casesFound} />
         <SummaryMetric
-          label="Confidence adjustment"
+          label="Confidence impact"
           value={formatDelta(historicalCaseSummary.confidenceAdjustment)}
           tone={historicalCaseSummary.confidenceAdjustment >= 0 ? 'positive' : 'caution'}
         />
-        <SummaryMetric label="Base confidence" value={Number.isFinite(historicalCaseSummary.baseConfidence) ? historicalCaseSummary.baseConfidence.toFixed(2) : 'Not available'} />
-        <SummaryMetric label="Final confidence" value={Number.isFinite(historicalCaseSummary.finalConfidence) ? historicalCaseSummary.finalConfidence.toFixed(2) : 'Not available'} />
+        <SummaryMetric label="Historical signal" value={historicalCaseSummary.overallSignal || 'Not available'} />
       </div>
 
-      {Number.isFinite(historicalCaseSummary.baseConfidence) && (
-        <div className="mb-5 grid grid-cols-1 md:grid-cols-3 gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
-          <DetailItem label="Base confidence before history" value={historicalCaseSummary.baseConfidence.toFixed(2)} />
-          <DetailItem label="Historical adjustment" value={formatDelta(historicalCaseSummary.confidenceAdjustment)} />
-          <DetailItem label="Final confidence after history" value={historicalCaseSummary.finalConfidence?.toFixed(2)} />
-        </div>
-      )}
+      <ConfidenceBridge summary={historicalCaseSummary} />
 
       {historicalCaseSummary.sparse && (
         <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-800">
@@ -224,10 +250,9 @@ export default function HistoricalReliabilitySection({ historicalCaseSummary }) 
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="hidden lg:grid grid-cols-[1fr_0.7fr_1.3fr_1.3fr_1fr_32px] gap-4 px-4 text-xs text-slate-400 font-bold uppercase tracking-wider">
+          <div className="hidden lg:grid grid-cols-[1fr_1fr_1.25fr_1fr_32px] gap-4 px-4 text-xs text-slate-400 font-bold uppercase tracking-wider">
             <span>Similar case</span>
             <span>Similarity</span>
-            <span>Why it matched</span>
             <span>Historical outcome</span>
             <span>Impact on this case</span>
             <span></span>

@@ -62,6 +62,11 @@ class LocalityMatchResult:
     matchReason: str
     matchedTerms: List[str]
     matchType: str  # 'exact_locality' | 'alias' | 'project' | 'zone' | 'city' | 'none'
+    geographicOverlap: float = 0.0
+    distanceToPropertyKm: Optional[float] = None
+    dynamicRadiusKm: Optional[float] = None
+    radiusProfile: str = "unknown"
+    genericCityArticle: bool = False
 
 
 def _norm(text: str) -> str:
@@ -93,6 +98,41 @@ def build_alias_pool(locality: str, aliases: Optional[Iterable[str]] = None) -> 
     return pool
 
 
+def locality_radius_profile(city: Optional[str], zone: Optional[str] = None) -> Tuple[str, float]:
+    """Return a dynamic locality radius for property-impact scoring."""
+    c = _norm(city or "")
+    z = _norm(zone or "")
+    dense_metros = {
+        "mumbai", "delhi", "new delhi", "bengaluru", "bangalore",
+        "gurugram", "gurgaon", "noida", "thane", "navi mumbai",
+    }
+    tier2 = {
+        "pune", "hyderabad", "chennai", "kolkata", "ahmedabad", "surat",
+        "jaipur", "lucknow", "kochi", "indore", "nagpur", "coimbatore",
+    }
+    if c in dense_metros or "mumbai" in z:
+        return "dense_metro", 1.0
+    if c in tier2:
+        return "tier_2_city", 3.0
+    if c:
+        return "standard_urban", 5.0
+    return "rural_sparse", 8.0
+
+
+def _estimated_distance_for_match(match_type: str, radius_km: float) -> Optional[float]:
+    if match_type == "exact_locality":
+        return round(radius_km * 0.25, 2)
+    if match_type == "alias":
+        return round(radius_km * 0.75, 2)
+    if match_type == "project":
+        return round(radius_km * 1.0, 2)
+    if match_type == "zone":
+        return round(radius_km * 2.5, 2)
+    if match_type == "city":
+        return round(radius_km * 8.0, 2)
+    return None
+
+
 def match_document_to_locality(
     document_text: str,
     *,
@@ -103,8 +143,9 @@ def match_document_to_locality(
 ) -> LocalityMatchResult:
     """Score 0..1 for how strongly this document references the target locality."""
     haystack = _norm(document_text)
+    radius_profile, radius_km = locality_radius_profile(city, zone)
     if not haystack:
-        return LocalityMatchResult(0.0, "empty_text", [], "none")
+        return LocalityMatchResult(0.0, "empty_text", [], "none", 0.0, None, radius_km, radius_profile)
 
     loc_norm = _norm(locality)
     zone_norm = _norm(zone or "")
@@ -115,7 +156,10 @@ def match_document_to_locality(
     # 1) Exact locality match → relevance 0.95–1.0
     if loc_norm and loc_norm in haystack:
         matched.append(loc_norm)
-        return LocalityMatchResult(0.95, "exact_locality_match", matched, "exact_locality")
+        return LocalityMatchResult(
+            0.95, "exact_locality_match", matched, "exact_locality",
+            0.95, _estimated_distance_for_match("exact_locality", radius_km), radius_km, radius_profile
+        )
 
     # 2) Alias matches → relevance 0.70–0.85
     alias_pool = build_alias_pool(locality, aliases)
@@ -125,24 +169,39 @@ def match_document_to_locality(
         # Pick relevance based on how strong the alias is. The first item in
         # the pool is the locality itself (already handled above), so any hit
         # here is an adjacency alias.
-        return LocalityMatchResult(0.78, "alias_match", matched, "alias")
+        alias_score = 0.72 if radius_profile == "dense_metro" else 0.78
+        return LocalityMatchResult(
+            alias_score, "alias_match", matched, "alias",
+            alias_score, _estimated_distance_for_match("alias", radius_km), radius_km, radius_profile
+        )
 
     # 3) Project / landmark token match → 0.65
     project_hits = _terms_present(haystack, PROJECT_TOKEN_HINTS.get(loc_norm, ()))
     if project_hits:
         matched.extend(project_hits)
-        return LocalityMatchResult(0.65, "project_landmark_match", matched, "project")
+        return LocalityMatchResult(
+            0.65, "project_landmark_match", matched, "project",
+            0.65, _estimated_distance_for_match("project", radius_km), radius_km, radius_profile
+        )
 
     # 4) Zone match → 0.40 (low, not enough by itself for confidence>=0.6 rule)
     if zone_norm:
         z_hits = _terms_present(haystack, ZONE_ALIASES.get(zone_norm, (zone_norm,)))
         if z_hits:
             matched.extend(z_hits)
-            return LocalityMatchResult(0.40, "zone_match_only", matched, "zone")
+            zone_score = 0.22 if radius_profile == "dense_metro" else 0.40
+            return LocalityMatchResult(
+                zone_score, "zone_match_only", matched, "zone",
+                zone_score, _estimated_distance_for_match("zone", radius_km), radius_km, radius_profile
+            )
 
     # 5) City-only mention → 0.20
     if city_norm and city_norm in haystack:
         matched.append(city_norm)
-        return LocalityMatchResult(0.20, "city_only_mention", matched, "city")
+        city_score = 0.06 if radius_profile == "dense_metro" else 0.15
+        return LocalityMatchResult(
+            city_score, "city_only_mention", matched, "city",
+            city_score, _estimated_distance_for_match("city", radius_km), radius_km, radius_profile, True
+        )
 
-    return LocalityMatchResult(0.0, "no_locality_signal", [], "none")
+    return LocalityMatchResult(0.0, "no_locality_signal", [], "none", 0.0, None, radius_km, radius_profile)

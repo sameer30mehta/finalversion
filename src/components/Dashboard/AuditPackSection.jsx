@@ -124,7 +124,7 @@ export default function AuditPackSection({ data, underwriterSummary }) {
           icon="fact_check"
           title="Audit Pack"
           eyebrow="Traceable outputs"
-          description="A judge, credit officer, or model-risk reviewer can see where each decision signal came from and which outputs are deterministic."
+          description="Comprehensive trace of data sources and computational models for credit review and compliance."
           actions={(
             <div className="flex flex-wrap gap-2">
               <Badge tone={confidence >= 0.75 ? 'emerald' : confidence >= 0.55 ? 'amber' : 'red'}>
@@ -151,21 +151,7 @@ export default function AuditPackSection({ data, underwriterSummary }) {
         </div>
       </SectionCard>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <SectionCard>
-          <SectionHeader
-            icon="verified_user"
-            title="Deterministic Boundary"
-            eyebrow="Model risk"
-            description="The LLM is deliberately kept outside numeric decisioning."
-          />
-          <div className="space-y-3">
-            <InfoItem label="Valuation" value="Market value, distress value, liquidity, time-to-liquidate, and LTV are computed by deterministic engines." />
-            <InfoItem label="AI role" value={underwriterSummary?.summary?.numericDecisionBoundary || 'AI only explains computed outputs and recommends evidence.'} />
-            <InfoItem label="Fallback posture" value="If SQLite, vision, or Ollama is unavailable, the UI marks the source and keeps deterministic review usable." />
-          </div>
-        </SectionCard>
-
+      <div className="grid grid-cols-1 gap-6">
         <SectionCard>
           <SectionHeader
             icon="query_stats"

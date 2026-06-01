@@ -58,7 +58,7 @@ function SignalBadge({ signal }) {
   );
 }
 
-function RiskLensTable({ riskLenses }) {
+function RiskLensCards({ riskLenses }) {
   if (!riskLenses?.length) {
     return (
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm font-semibold text-slate-500">
@@ -68,47 +68,45 @@ function RiskLensTable({ riskLenses }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-50">
-      <table className="min-w-[920px] w-full text-left">
-        <thead className="bg-white border-b border-slate-200">
-          <tr className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            <th className="px-4 py-3 w-[24%]">Risk lens</th>
-            <th className="px-4 py-3 w-[20%] border-l border-slate-100">Current book</th>
-            <th className="px-4 py-3 w-[20%] border-l border-slate-100">After this case</th>
-            <th className="px-4 py-3 w-[16%] border-l border-slate-100">Internal cap</th>
-            <th className="px-4 py-3 w-[20%] border-l border-slate-100">Signal</th>
-          </tr>
-        </thead>
-        <tbody>
-          {riskLenses.map((lens) => (
-            <tr key={lens.id} className="border-b border-slate-100 last:border-b-0 text-[12px] align-top">
-              <td className="px-4 py-3">
-                <p className="font-bold text-slate-700">{lens.label}</p>
-                <p className="text-xs text-slate-500 font-medium mt-1">{lens.explanation}</p>
-              </td>
-              <td className="px-4 py-3 border-l border-slate-100 text-slate-600 font-medium">
-                <p>{formatCurrency(lens.currentExposure)}</p>
-                <p className="text-xs text-slate-400 mt-1">{formatPercent(lens.currentShare)}</p>
-              </td>
-              <td className="px-4 py-3 border-l border-slate-100 text-slate-600 font-medium">
-                <p>{formatCurrency(lens.postLoanExposure)}</p>
-                <p className="text-xs text-slate-400 mt-1">{formatPercent(lens.postLoanShare)}</p>
-              </td>
-              <td className="px-4 py-3 border-l border-slate-100 text-slate-600 font-medium">
-                {formatPercent(lens.policyCap)}
-              </td>
-              <td className="px-4 py-3 border-l border-slate-100">
-                <SignalBadge signal={lens.signal} />
-                {lens.delinquencyRate !== undefined && (
-                  <p className="text-xs text-slate-500 font-semibold mt-2">
-                    Delq {formatPercent(lens.delinquencyRate)} / Default {formatPercent(lens.defaultRate)}
-                  </p>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {riskLenses.map((lens) => {
+        const share = Number(lens.postLoanShare) || 0;
+        const cap = Number(lens.policyCap) || 0;
+        const capUsage = cap > 0 ? Math.min(100, (share / cap) * 100) : 0;
+        return (
+          <div key={lens.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-slate-800">{lens.label}</p>
+                <p className="mt-1 text-xs font-medium leading-relaxed text-slate-500">{lens.explanation}</p>
+              </div>
+              <SignalBadge signal={lens.signal} />
+            </div>
+            {lens.id !== 'similar_bucket_performance' && (
+              <>
+                <div className="mt-4">
+                  <div className="mb-1 flex justify-between text-xs font-bold text-slate-500">
+                    <span>Policy capacity used after approval</span>
+                    <span>{formatPercent(share)} / {formatPercent(cap)}</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-white">
+                    <div className={`h-full rounded-full ${capUsage >= 100 ? 'bg-red-500' : capUsage >= 80 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${capUsage}%` }} />
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-xs font-semibold text-slate-600">
+                  <div><p className="text-slate-400">Current book</p><p>{formatCurrency(lens.currentExposure)} ({formatPercent(lens.currentShare)})</p></div>
+                  <div><p className="text-slate-400">After this case</p><p>{formatCurrency(lens.postLoanExposure)} ({formatPercent(lens.postLoanShare)})</p></div>
+                </div>
+              </>
+            )}
+            {lens.delinquencyRate !== undefined && (
+              <p className="mt-3 text-xs font-semibold text-slate-500">
+                Delinquency {formatPercent(lens.delinquencyRate)} / Default {formatPercent(lens.defaultRate)}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -150,12 +148,10 @@ export default function PortfolioRiskSection({ portfolioRiskSummary }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
         <SummaryMetric label="Risk score" value={`${summary.portfolioRiskScore ?? 0}/100`} />
         <SummaryMetric label="Proposed exposure" value={formatCurrency(summary.proposedExposure)} />
         <SummaryMetric label="Recommended LTV" value={formatLtv(summary.recommendedLtv)} />
-        <SummaryMetric label="LTV adjustment" value={`${summary.ltvAdjustmentPct ?? 0} pts`} />
-        <SummaryMetric label="Base LTV" value={formatLtv(summary.baseLtv)} />
         <SummaryMetric label="Review" value={portfolioRiskSummary.decisionImpact?.seniorReviewRequired ? 'Senior review' : 'Standard'} />
       </div>
 
@@ -171,7 +167,7 @@ export default function PortfolioRiskSection({ portfolioRiskSummary }) {
         )}
       </div>
 
-      <RiskLensTable riskLenses={portfolioRiskSummary.riskLenses || []} />
+      <RiskLensCards riskLenses={portfolioRiskSummary.riskLenses || []} />
 
       {portfolioRiskSummary.riskFlags?.length > 0 && (
         <div className="mt-5">

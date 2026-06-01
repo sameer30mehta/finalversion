@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scanImageFile } from '../../lib/api';
+import { extractImageMetadata, summarizePacketMetadata } from '../../lib/imageMetadata';
 import {
   MODEL_LABELS,
   OPTIONAL_CATEGORIES,
@@ -11,23 +12,6 @@ const ACCEPTED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 const MAX_PACKET_IMAGES = 8;
 
-const ROLE_OPTIONS = [
-  { value: 'unknown',      label: 'Unknown' },
-  { value: 'borrower',     label: 'Borrower' },
-  { value: 'bank_officer', label: 'Bank Officer' },
-  { value: 'valuer',       label: 'Valuer' },
-];
-const GPS_OPTIONS = [
-  { value: 'unknown', label: 'Unknown' },
-  { value: 'pass',    label: 'GPS Match' },
-  { value: 'fail',    label: 'GPS Mismatch' },
-];
-const VERIFICATION_OPTIONS = [
-  { value: 'unknown',            label: 'Unknown' },
-  { value: 'verified_capture',   label: 'Verified Capture' },
-  { value: 'unverified_upload',  label: 'Unverified Upload' },
-];
-
 const STATUS_TONE = {
   not_uploaded: 'bg-slate-50 text-slate-600 border-slate-200',
   incomplete:   'bg-amber-50 text-amber-700 border-amber-200',
@@ -36,12 +20,12 @@ const STATUS_TONE = {
 const STRENGTH_TONE = {
   none:     'bg-slate-50 text-slate-600 border-slate-200',
   weak:     'bg-amber-50 text-amber-700 border-amber-200',
-  moderate: 'bg-blue-50 text-blue-700 border-blue-200',
+  moderate: 'bg-amber-50 text-amber-700 border-amber-200',
   strong:   'bg-emerald-50 text-emerald-700 border-emerald-200',
 };
 const TRUST_TONE = {
   low:    'bg-amber-50 text-amber-700 border-amber-200',
-  medium: 'bg-blue-50 text-blue-700 border-blue-200',
+  medium: 'bg-amber-50 text-amber-700 border-amber-200',
   high:   'bg-emerald-50 text-emerald-700 border-emerald-200',
 };
 const ROUTE_LABEL = {
@@ -52,7 +36,7 @@ const ROUTE_LABEL = {
 };
 const ROUTE_TONE = {
   none: 'bg-slate-50 text-slate-600 border-slate-200',
-  field_officer_review: 'bg-blue-50 text-blue-700 border-blue-200',
+  field_officer_review: 'bg-amber-50 text-amber-700 border-amber-200',
   technical_valuer_inspection: 'bg-amber-50 text-amber-700 border-amber-200',
   structural_engineer_inspection: 'bg-red-50 text-red-700 border-red-200',
 };
@@ -72,12 +56,18 @@ function formatBytes(bytes) {
   return `${bytes} B`;
 }
 
-function CategoryTile({ category, required, entry, onSelect, onClear }) {
+function formatDistance(meters) {
+  if (!Number.isFinite(meters)) return 'GPS unavailable';
+  if (meters >= 1000) return `${(meters / 1000).toFixed(1)} km from property`;
+  return `${meters} m from property`;
+}
+
+function CategoryTile({ category, required, entry, isExtracting, onSelect, onClear }) {
   const inputRef = useRef(null);
   const present = Boolean(entry);
   return (
     <div
-      className={`relative rounded-xl border bg-white p-3 transition-shadow duration-150 ${
+      className={`relative flex flex-col h-full rounded-xl border bg-white p-3 transition-shadow duration-150 ${
         present
           ? 'border-emerald-200 shadow-sm'
           : required
@@ -101,32 +91,48 @@ function CategoryTile({ category, required, entry, onSelect, onClear }) {
           </button>
         )}
       </div>
-      {present ? (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          aria-label={`Replace ${category.label} image`}
-          className="block w-full text-left"
-        >
-          <img
-            src={entry.previewUrl}
-            alt={category.label}
-            className="w-full h-28 object-cover rounded-lg border border-slate-200"
-          />
-          <p className="mt-2 text-[11px] text-slate-500 truncate" title={entry.fileName}>
-            {entry.fileName} · {formatBytes(entry.fileSize)}
-          </p>
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          className="w-full h-28 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors duration-150 flex flex-col items-center justify-center gap-1"
-        >
-          <span aria-hidden="true" className="material-symbols-outlined text-slate-400 text-[24px]">add_a_photo</span>
-          <span className="text-[11px] font-semibold text-slate-500">Upload image</span>
-        </button>
-      )}
+      <div className="mt-auto w-full">
+        {isExtracting ? (
+          <div className="flex h-28 w-full flex-col items-center justify-center gap-2 rounded-lg border border-slate-100 bg-slate-50">
+            <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[22px] text-slate-500">progress_activity</span>
+            <span className="text-[11px] font-semibold text-slate-700">Reading metadata...</span>
+          </div>
+        ) : present ? (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            aria-label={`Replace ${category.label} image`}
+            className="block w-full text-left"
+          >
+            <img
+              src={entry.previewUrl}
+              alt={category.label}
+              className="w-full h-28 object-cover rounded-lg border border-slate-200"
+            />
+            <p className="mt-2 text-[11px] text-slate-500 truncate" title={entry.fileName}>
+              {entry.fileName} · {formatBytes(entry.fileSize)}
+            </p>
+            <p className={`mt-1 text-[10px] font-bold ${
+              entry.metadata?.gpsMatchStatus === 'pass'
+                ? 'text-emerald-600'
+                : entry.metadata?.gpsMatchStatus === 'fail'
+                  ? 'text-red-600'
+                  : 'text-slate-400'
+            }`}>
+              {formatDistance(entry.metadata?.gpsDistanceMeters)}
+            </p>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="w-full h-28 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors duration-150 flex flex-col items-center justify-center gap-1"
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-slate-400 text-[24px]">add_a_photo</span>
+            <span className="text-[11px] font-semibold text-slate-500">Upload image</span>
+          </button>
+        )}
+      </div>
       <input
         ref={inputRef}
         type="file"
@@ -157,10 +163,14 @@ export default function VisualEvidenceSection({
   modelUsed,
   setModelUsed,
   onChange,
+  propertyCoordinates = [],
+  onRegisterProcessor,
+  onBusyChange,
 }) {
   // Local UI-only state (validation message, audit accordion).
   const [error, setError] = useState(null);
   const [auditOpen, setAuditOpen] = useState(false);
+  const [extractingCategories, setExtractingCategories] = useState({});
 
   const visualEvidence = useMemo(() => {
     const metaForEngine = {
@@ -182,7 +192,16 @@ export default function VisualEvidenceSection({
     if (typeof onChange === 'function') onChange(visualEvidence);
   }, [visualEvidence, onChange]);
 
-  function setCategoryFile(categoryId, file) {
+  useEffect(() => {
+    setPacketMetadata(summarizePacketMetadata(packet));
+  }, [packet, setPacketMetadata]);
+
+  useEffect(() => {
+    if (typeof onBusyChange !== 'function') return;
+    onBusyChange(scanStatus === 'running' || Object.values(extractingCategories).some(Boolean));
+  }, [extractingCategories, onBusyChange, scanStatus]);
+
+  async function setCategoryFile(categoryId, file) {
     setError(null);
     if (!file) return;
     if (!ACCEPTED_TYPES.includes(file.type)) {
@@ -198,25 +217,34 @@ export default function VisualEvidenceSection({
       setError(`Maximum ${MAX_PACKET_IMAGES} images per packet.`);
       return;
     }
+    setExtractingCategories((prev) => ({ ...prev, [categoryId]: true }));
     const previewUrl = URL.createObjectURL(file);
-    setPacket((prev) => {
-      const old = prev[categoryId];
-      if (old?.previewUrl) URL.revokeObjectURL(old.previewUrl);
-      return {
-        ...prev,
-        [categoryId]: {
-          imageId: `img-${categoryId}-${Date.now()}`,
-          file,
-          previewUrl,
-          fileName: file.name,
-          fileType: file.type,
-          fileSize: file.size,
-          metadata: {},
-        },
-      };
-    });
-    setScanStatus('not_run');
-    setModelResults([]);
+    try {
+      const metadata = await extractImageMetadata(file, propertyCoordinates);
+      setPacket((prev) => {
+        const old = prev[categoryId];
+        if (old?.previewUrl) URL.revokeObjectURL(old.previewUrl);
+        return {
+          ...prev,
+          [categoryId]: {
+            imageId: `img-${categoryId}-${Date.now()}`,
+            file,
+            previewUrl,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            metadata,
+          },
+        };
+      });
+      setScanStatus('not_run');
+      setModelResults([]);
+    } catch (metadataError) {
+      URL.revokeObjectURL(previewUrl);
+      setError(`Could not read image metadata: ${metadataError?.message || 'unknown error'}`);
+    } finally {
+      setExtractingCategories((prev) => ({ ...prev, [categoryId]: false }));
+    }
   }
 
   function clearCategory(categoryId) {
@@ -232,9 +260,19 @@ export default function VisualEvidenceSection({
     setError(null);
   }
 
-  async function runVisionScan() {
+  const runVisionScan = useCallback(async () => {
     const allRequiredPresent = REQUIRED_CATEGORIES.every((c) => packet[c.id]);
-    if (!allRequiredPresent || scanStatus === 'running') return;
+    if (!allRequiredPresent || scanStatus === 'running') {
+      const evidence = buildVisualEvidence({
+        packet,
+        metadata: summarizePacketMetadata(packet),
+        modelResults: [],
+        modelStatus: 'not_run',
+        modelUsed: 'none',
+      });
+      if (typeof onChange === 'function') onChange(evidence);
+      return evidence;
+    }
     setScanStatus('running');
     setError(null);
     const results = [];
@@ -265,14 +303,27 @@ export default function VisualEvidenceSection({
         });
       }
     }
+    const nextModelUsed = firstModelName || 'Xenova/owlvit-base-patch32';
+    const nextScanStatus = anySuccess ? 'completed' : 'unavailable';
+    const evidence = buildVisualEvidence({
+      packet,
+      metadata: summarizePacketMetadata(packet),
+      modelResults: results,
+      modelStatus: nextScanStatus,
+      modelUsed: nextModelUsed,
+    });
     setModelResults(results);
-    setModelUsed(firstModelName || 'Xenova/owlvit-base-patch32');
-    if (!anySuccess) {
-      setScanStatus('unavailable');
-    } else {
-      setScanStatus('completed');
-    }
-  }
+    setModelUsed(nextModelUsed);
+    setScanStatus(nextScanStatus);
+    if (typeof onChange === 'function') onChange(evidence);
+    return evidence;
+  }, [onChange, packet, scanStatus, setModelResults, setModelUsed, setScanStatus]);
+
+  useEffect(() => {
+    if (typeof onRegisterProcessor !== 'function') return undefined;
+    onRegisterProcessor(runVisionScan);
+    return () => onRegisterProcessor(null);
+  }, [onRegisterProcessor, runVisionScan]);
 
   const effects = visualEvidence.deterministicEffects;
   const trust = visualEvidence.metadataTrust;
@@ -288,13 +339,13 @@ export default function VisualEvidenceSection({
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span aria-hidden="true" className="material-symbols-outlined text-indigo-500 text-[22px]">photo_library</span>
+              <span aria-hidden="true" className="material-symbols-outlined text-slate-500 text-[22px]">photo_library</span>
               <h3 className="text-lg font-bold text-slate-900">Visual Collateral Evidence</h3>
               <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-500">OPTIONAL</span>
             </div>
             <p className="max-w-3xl text-sm font-medium leading-relaxed text-slate-500">
-              Optional standardized image packet used for evidence quality, condition signals, and inspection routing.
-              Images do not directly determine valuation. Capture and spoofing prevention are the responsibility of the upstream bank/valuer capture workflow.
+              Add a categorized field packet for automatic metadata checks, condition signals, and inspection routing.
+              Clean verified packets can improve confidence; mismatches and visible concerns reduce it within fixed safety caps.
             </p>
           </div>
           <div className="flex flex-wrap gap-2 md:justify-end">
@@ -312,7 +363,7 @@ export default function VisualEvidenceSection({
       <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
           <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">Required Image Categories</h4>
-          <p className="text-xs font-mono text-slate-500">{usedSlots} / {MAX_PACKET_IMAGES} uploaded</p>
+          <p className="text-[11px] font-mono text-slate-400 font-medium">{usedSlots} / {MAX_PACKET_IMAGES} uploaded</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
           {REQUIRED_CATEGORIES.map((cat) => (
@@ -321,6 +372,7 @@ export default function VisualEvidenceSection({
               category={cat}
               required
               entry={packet[cat.id]}
+              isExtracting={Boolean(extractingCategories[cat.id])}
               onSelect={(file) => setCategoryFile(cat.id, file)}
               onClear={() => clearCategory(cat.id)}
             />
@@ -338,6 +390,7 @@ export default function VisualEvidenceSection({
                 category={cat}
                 required={false}
                 entry={packet[cat.id]}
+                isExtracting={Boolean(extractingCategories[cat.id])}
                 onSelect={(file) => setCategoryFile(cat.id, file)}
                 onClear={() => clearCategory(cat.id)}
               />
@@ -350,72 +403,57 @@ export default function VisualEvidenceSection({
         )}
       </div>
 
-      {/* Metadata controls */}
+      {/* Automatic metadata verification */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
-        <div className="flex items-baseline justify-between mb-4">
-          <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">Packet Metadata</h4>
-          <span className="text-[11px] text-slate-400">PropScore consumes metadata; it does not produce it.</span>
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">Automatic Metadata Verification</h4>
+            <p className="mt-1 max-w-3xl text-sm font-medium leading-relaxed text-slate-500">
+              Embedded GPS, capture time, and image resolution are read locally from each file. GPS is checked against the property pin automatically.
+            </p>
+          </div>
+          <span className={`self-start px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border ${TRUST_TONE[trust.sourceTrustLevel]}`}>
+            Trust: {trust.sourceTrustLevel}
+          </span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider space-y-1">
-            <span>Uploaded by role</span>
-            <select
-              value={packetMetadata.uploadedByRole}
-              onChange={(e) => setPacketMetadata({ ...packetMetadata, uploadedByRole: e.target.value })}
-              className="w-full mt-1 px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow duration-150"
-            >
-              {ROLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider space-y-1">
-            <span>GPS match status</span>
-            <select
-              value={packetMetadata.gpsMatchStatus}
-              onChange={(e) => setPacketMetadata({ ...packetMetadata, gpsMatchStatus: e.target.value })}
-              className="w-full mt-1 px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow duration-150"
-            >
-              {GPS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider space-y-1">
-            <span>Capture verification</span>
-            <select
-              value={packetMetadata.captureVerificationStatus}
-              onChange={(e) => setPacketMetadata({ ...packetMetadata, captureVerificationStatus: e.target.value })}
-              className="w-full mt-1 px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow duration-150"
-            >
-              {VERIFICATION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider space-y-1">
-            <span>Freshness (days)</span>
-            <input
-              type="number"
-              min="0"
-              max="3650"
-              placeholder="e.g. 7"
-              value={packetMetadata.freshnessDays}
-              onChange={(e) => setPacketMetadata({ ...packetMetadata, freshnessDays: e.target.value })}
-              className="w-full mt-1 px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow duration-150"
-            />
-          </label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">GPS verification</p>
+            <p className={`mt-1 text-sm font-bold ${trust.gpsMatchStatus === 'fail' ? 'text-red-700' : trust.gpsMatchStatus === 'pass' ? 'text-emerald-700' : 'text-slate-700'}`}>
+              {trust.gpsMatchStatus === 'pass' ? 'Property location matched' : trust.gpsMatchStatus === 'fail' ? 'Location mismatch found' : 'No embedded GPS'}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">{trust.embeddedGpsCount || 0} of {usedSlots} images include GPS</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Capture timestamp</p>
+            <p className="mt-1 text-sm font-bold text-slate-700">
+              {trust.embeddedTimestampCount > 0 && trust.freshnessDays !== null && trust.freshnessDays !== undefined
+                ? `${trust.freshnessDays} day${trust.freshnessDays === 1 ? '' : 's'} old`
+                : 'No embedded timestamp'}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">{trust.embeddedTimestampCount || 0} of {usedSlots} images include EXIF capture time</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Image quality</p>
+            <p className="mt-1 text-sm font-bold text-slate-700">{visualEvidence.quality.averageResolution}</p>
+            <p className="mt-1 text-xs text-slate-500">{visualEvidence.quality.usableImageCount} usable image{visualEvidence.quality.usableImageCount === 1 ? '' : 's'}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Metadata trust score</p>
+            <p className="mt-1 text-sm font-bold text-slate-700">{trust.metadataTrustScore.toFixed(2)} / 1.00</p>
+            <p className="mt-1 text-xs text-slate-500">{trust.verifiedImageCount || 0} fully verified file{trust.verifiedImageCount === 1 ? '' : 's'}</p>
+          </div>
         </div>
 
-        {/* Scan controls + trust summary */}
         <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border ${TRUST_TONE[trust.sourceTrustLevel]}`}>
-              Metadata trust: {trust.sourceTrustLevel}
-            </span>
-            <span className="text-xs font-mono text-slate-500">Score {trust.metadataTrustScore.toFixed(2)}</span>
-            <span className="text-xs font-semibold text-slate-500">· Freshness: {trust.freshnessStatus}</span>
-            <span className="text-xs font-semibold text-slate-500">· GPS: {trust.gpsMatchStatus}</span>
-          </div>
+          <p className="text-xs font-semibold leading-relaxed text-slate-500">
+            Proceeding to evaluation runs condition detection automatically. Re-run it here after replacing evidence.
+          </p>
           <button
             type="button"
             onClick={runVisionScan}
             disabled={scanDisabled}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors duration-150 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors duration-150 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
               {scanStatus === 'running' ? 'hourglass_top' : 'visibility'}
@@ -424,12 +462,12 @@ export default function VisualEvidenceSection({
               ? 'Running vision scan...'
               : scanStatus === 'completed'
                 ? 'Re-run vision scan'
-                : 'Run vision scan'}
+                : 'Analyze images now'}
           </button>
         </div>
         {!allRequiredPresent && (
           <p className="mt-3 text-xs font-semibold text-slate-500">
-            Upload all 5 required categories to enable the optional vision scan.
+            Add all 5 required categories for a scored visual packet. Incomplete packets remain visible but have zero score impact.
           </p>
         )}
       </div>
@@ -451,7 +489,7 @@ export default function VisualEvidenceSection({
             <p className="text-sm font-semibold text-slate-500">
               {scanStatus === 'completed'
                 ? 'No detection signals above threshold. Visual packet treated as clean.'
-                : 'No detections yet. Upload required images and run the vision scan.'}
+                : 'No detections yet. Complete the required packet, then proceed to run analysis automatically.'}
             </p>
           ) : (
             <ul className="space-y-2">
@@ -559,7 +597,7 @@ export default function VisualEvidenceSection({
           aria-expanded={auditOpen}
         >
           <span className="text-sm font-bold uppercase tracking-wider text-slate-700">Visual Evidence Audit Trail</span>
-          <span className="flex items-center gap-2 text-xs font-mono text-slate-500">
+          <span className="flex items-center gap-2 text-[11px] font-mono text-slate-400 font-medium">
             {visualEvidence.auditTrail.length} entr{visualEvidence.auditTrail.length === 1 ? 'y' : 'ies'}
             <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
               {auditOpen ? 'expand_less' : 'expand_more'}
@@ -574,8 +612,8 @@ export default function VisualEvidenceSection({
                   <p className="text-sm font-bold text-slate-800">{rule.ruleName}</p>
                   <span className="text-[10px] font-mono text-slate-500 uppercase">{rule.ruleId}</span>
                 </div>
-                <p className="text-xs font-mono text-slate-500">input: {rule.input}</p>
-                <p className="text-xs font-mono text-slate-500 mt-0.5">effect: {rule.effect}</p>
+                <p className="text-[11px] font-mono text-slate-400 font-medium">input: {rule.input}</p>
+                <p className="text-[11px] font-mono text-slate-400 font-medium mt-0.5">effect: {rule.effect}</p>
                 <p className="text-sm text-slate-700 mt-1">{rule.explanation}</p>
               </li>
             ))}

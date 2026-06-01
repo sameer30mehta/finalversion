@@ -49,7 +49,7 @@ self.addEventListener('message', async (event) => {
            
            // OwlViT expects generic object URLs to be processed, we will run the pipeline
            const output = await detector(imageUrl, candidateLabels, { 
-             threshold: 0.08  // Adjust threshold to be sensitive for hackathon demo purposes
+              threshold: 0.08
            });
            
            self.postMessage({ status: 'complete', output });

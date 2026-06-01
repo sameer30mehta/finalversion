@@ -81,15 +81,55 @@ export async function resolveLocalityIntelligenceFromBackend(currentCase) {
       body: JSON.stringify(currentCase),
       signal: controller.signal
     });
-    if (!response.ok) return null;
+    if (!response.ok) return buildLocalityContextFallback(currentCase, `Backend returned ${response.status}`);
     const result = await response.json();
-    return result?.source === 'live_whitelisted_sources' ? result : null;
+    return result?.source === 'live_whitelisted_sources'
+      ? result
+      : buildLocalityContextFallback(currentCase, 'Backend returned an unexpected locality payload');
   } catch (error) {
-    console.warn('Locality intelligence unavailable; section will show degraded state.', error);
-    return null;
+    console.warn('Live locality intelligence unavailable; using zero-impact locality context.', error);
+    return buildLocalityContextFallback(currentCase, error?.message || 'Backend unreachable');
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function buildLocalityContextFallback(currentCase = {}, reason = 'Live sources unavailable') {
+  return {
+    source: 'local_context_fallback',
+    status: 'baseline_context',
+    runMode: 'baseline',
+    locality: currentCase.locality || 'Current micro-market',
+    microMarketId: currentCase.microMarketId || null,
+    eventsFound: 0,
+    acceptedEvents: 0,
+    rejectedEvents: 0,
+    growthSignals: 0,
+    riskSignals: 0,
+    neutralSignals: 0,
+    propertyImpactEvents: 0,
+    liquidityDelta: 0,
+    marketabilityDelta: 0,
+    confidenceDelta: 0,
+    timeToLiquidateDeltaPct: 0,
+    manualReviewRequired: false,
+    inspectionRoute: 'none',
+    riskFlags: [],
+    sourceTierCounts: { official: 0, reputed_media: 0, local_media: 0 },
+    corroborationCounts: {},
+    watchlistSignals: [],
+    events: [],
+    sourceStatuses: [],
+    auditTrail: [{
+      ruleId: 'NEWS_BASELINE_CONTEXT_001',
+      source: 'frontend_resilience',
+      input: reason,
+      effect: 'locality event deltas = 0',
+      explanation: 'Live event sources were unavailable, so the case retained a zero-impact locality baseline instead of blocking valuation.',
+    }],
+    note: 'Live event sources were unavailable. Property location and infrastructure context remain available with zero event-based score impact.',
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 export async function generateUnderwriterSummary(payload, options = {}) {
@@ -276,7 +316,7 @@ export class PropScoreAPI {
       });
 
       if (!response.ok) {
-        const error = await response.json();
+        const error = await response.json().catch(() => ({}));
         throw new Error(error.detail || `Valuation failed: ${response.status}`);
       }
 
@@ -300,27 +340,7 @@ export class PropScoreAPI {
     }
   }
 
-  /**
-   * Real-time pipeline progress monitoring (WebSocket)
-   * 
-   * In production: connects to WebSocket endpoint for live progress
-   * Shows each stage: geo enrichment, VLM analysis, fraud detection, etc
-   */
-  static subscribeToProgress(valuationId, onUpdate) {
-    // WebSocket endpoint: ws://localhost:8000/progress/{valuationId}
-    // For now: HTTP polling fallback
-    
-    const pollInterval = setInterval(async () => {
-      try {
-        // Would query GET /valuate/{valuationId}/status
-        // onUpdate({ stage: 'vision_analysis', progress: 45 });
-      } catch (error) {
-        console.error('Progress polling error:', error);
-      }
-    }, 1000);
 
-    return () => clearInterval(pollInterval);
-  }
 
   /**
    * Validate address via geocoding

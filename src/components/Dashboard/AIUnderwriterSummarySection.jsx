@@ -76,11 +76,16 @@ function LoadingState() {
         </div>
         <StatusBadge tone="indigo">Generating</StatusBadge>
       </div>
-      <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-5 flex items-center gap-4">
-        <div className="w-9 h-9 rounded-full border-4 border-indigo-100 border-t-indigo-600 animate-spin shrink-0"></div>
-        <div>
+      <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-5 flex flex-col gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-9 h-9 rounded-full border-4 border-indigo-100 border-t-indigo-600 animate-spin shrink-0"></div>
           <p className="text-sm font-bold text-indigo-900">Generating fast AI summary</p>
-          <p className="text-[12px] font-medium text-indigo-700 mt-1">Calling local Ollama with llama3.2:3b first and giving it up to 200 seconds before fallback handling.</p>
+        </div>
+        <div className="space-y-3 pl-13 w-full">
+          <div className="h-2.5 bg-indigo-200/50 rounded-full animate-pulse w-3/4"></div>
+          <div className="h-2.5 bg-indigo-200/50 rounded-full animate-pulse w-full"></div>
+          <div className="h-2.5 bg-indigo-200/50 rounded-full animate-pulse w-5/6"></div>
+          <div className="h-2.5 bg-indigo-200/50 rounded-full animate-pulse w-1/2"></div>
         </div>
       </div>
     </section>
@@ -113,7 +118,7 @@ function DebugAttempts({ debug }) {
 }
 
 function EnhancementStatus({ enhancementState }) {
-  if (!enhancementState?.status || enhancementState.status === 'idle') return null;
+  return null;
 
   const toneClass = enhancementState.status === 'upgraded'
     ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -189,24 +194,8 @@ export default function AIUnderwriterSummarySection({ summaryResponse, isLoading
           <p className="text-sm text-slate-500 font-medium">
             AI summary explains system outputs. Numeric values, scores, LTV, and flags are computed by deterministic engines.
           </p>
-          {source === 'rule_based_fallback' && (
-            <p className="mt-2 text-[12px] font-semibold text-amber-700">
-              Rule-based summary shown because local LLM was unavailable or timed out.
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap lg:justify-end gap-2">
-          <StatusBadge tone={source === 'ollama' ? 'emerald' : source === 'rule_based_fallback' ? 'amber' : 'slate'}>
-            Source: {SOURCE_LABEL[source] || SOURCE_LABEL.unavailable}
-          </StatusBadge>
-          <StatusBadge tone={summaryQuality === 'enhanced' ? 'emerald' : summaryQuality === 'fast' ? 'indigo' : summaryQuality === 'fallback' ? 'amber' : 'slate'}>
-            Summary: {SUMMARY_QUALITY_LABEL[summaryQuality] || SUMMARY_QUALITY_LABEL.unavailable}
-          </StatusBadge>
-          <StatusBadge tone="slate">Model: {displayModelValue(summaryResponse)}</StatusBadge>
-          {summaryResponse?.fallbackUsed && source === 'ollama' && <StatusBadge tone="amber">Fallback used</StatusBadge>}
         </div>
       </div>
-
       {!summary ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
           <p className="text-sm font-bold text-slate-800">AI underwriter summary unavailable</p>
@@ -227,7 +216,6 @@ export default function AIUnderwriterSummarySection({ summaryResponse, isLoading
         </div>
       ) : (
         <div className="space-y-5">
-          <EnhancementStatus enhancementState={enhancementState} />
 
           <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-5">
             <p className="text-xs text-indigo-500 font-bold uppercase tracking-wider mb-1">Executive summary</p>

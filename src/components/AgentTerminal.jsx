@@ -17,6 +17,8 @@ const LOG_MESSAGES = [
 
 export default function AgentTerminal({ isActive, locationName = "Target", hasImages = false, externalLog = null, blockComplete = false, onComplete }) {
   const [logs, setLogs] = useState([]);
+  const [progress, setProgress] = useState(0);
+  const [totalSteps, setTotalSteps] = useState(LOG_MESSAGES.length);
   const containerRef = useRef(null);
   
   const isBlockedRef = useRef(blockComplete);
@@ -41,6 +43,8 @@ export default function AgentTerminal({ isActive, locationName = "Target", hasIm
     const activeLogs = LOG_MESSAGES.map(l => ({ ...l, msg: l.msg.replace('{location}', locationName) }))
       .filter(l => !l.conditional || hasImages);
 
+    setTotalSteps(activeLogs.length);
+
     activeLogs.forEach((log, index) => {
       const isLast = index === activeLogs.length - 1;
       const t = setTimeout(() => {
@@ -50,6 +54,8 @@ export default function AgentTerminal({ isActive, locationName = "Target", hasIm
           msg: log.msg,
           id: index
         }]);
+        setProgress(Math.round(((index + 1) / activeLogs.length) * 100));
+        
         if (isLast && onCompleteRef.current) {
           // Delay completion if blocked by an external action (like a huge model download)
           const attemptCompletion = () => {
@@ -77,41 +83,55 @@ export default function AgentTerminal({ isActive, locationName = "Target", hasIm
   if (!isActive && logs.length === 0) return null;
 
   return (
-    <div className="bg-slate-950 rounded-xl overflow-hidden shadow-2xl border border-slate-800 w-full max-w-3xl mx-auto flex flex-col font-mono text-sm relative z-50">
-      <div className="bg-slate-900 border-b border-slate-800 px-4 py-2 flex items-center gap-3">
+    <div className="bg-white rounded-xl overflow-hidden shadow-xl border border-slate-200 w-full max-w-3xl mx-auto flex flex-col font-mono text-sm relative z-50">
+      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex items-center gap-3">
         <div className="flex gap-1.5">
-          <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-          <div className="w-3 h-3 rounded-full bg-amber-500/80"></div>
-          <div className="w-3 h-3 rounded-full bg-emerald-500/80"></div>
+          <div className="w-3 h-3 rounded-full bg-red-400"></div>
+          <div className="w-3 h-3 rounded-full bg-amber-400"></div>
+          <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
         </div>
-        <p className="text-slate-400 text-xs font-semibold tracking-wider">PROPSCORE TERMINAL :: AGENTIC_SWARM_ACTIVE</p>
+        <p className="text-slate-500 text-xs font-bold tracking-wider">PROPSCORE TERMINAL :: AGENTIC_SWARM_ACTIVE</p>
       </div>
-      <div ref={containerRef} className="p-4 h-64 overflow-y-auto w-full text-left space-y-2 relative scrollbar-hide scroll-smooth">
-        {logs.map((log) => (
-          <div key={log.id} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <span className="text-slate-500">[{log.timestamp}]</span>{' '}
+      <div ref={containerRef} className="p-4 h-64 overflow-y-auto w-full text-left space-y-3 relative scrollbar-hide scroll-smooth">
+        {logs.map((log, i) => (
+          <div key={log.id} className={`animate-in fade-in slide-in-from-bottom-2 duration-300 ${i === logs.length - 1 ? 'opacity-100' : 'opacity-70'}`}>
+            <span className="text-slate-400">[{log.timestamp}]</span>{' '}
             <span className={`font-bold ${
-              log.agent === 'Vision Agent' ? 'text-pink-400' :
-              log.agent === 'Legal Agent' ? 'text-blue-400' :
-              log.agent === 'Geospatial Agent' ? 'text-emerald-400' :
-              log.agent === 'Market Agent' ? 'text-amber-400' :
-              log.agent === 'Coordinator' ? 'text-white' : 'text-purple-400'
+              log.agent === 'Vision Agent' ? 'text-pink-600' :
+              log.agent === 'Legal Agent' ? 'text-blue-600' :
+              log.agent === 'Geospatial Agent' ? 'text-emerald-600' :
+              log.agent === 'Market Agent' ? 'text-amber-600' :
+              log.agent === 'Coordinator' ? 'text-slate-800' : 'text-purple-600'
             }`}>[{log.agent}]</span>{' '}
-            <span className="text-slate-300">{log.msg}</span>
+            <span className="text-slate-700">{log.msg}</span>
           </div>
         ))}
         {externalLog && (
           <div className="animate-in fade-in duration-300">
-            <span className="text-slate-500">[{new Date().toLocaleTimeString()}]</span>{' '}
-            <span className="font-bold text-pink-400">[Vision Agent]</span>{' '}
-            <span className="text-slate-300">{externalLog}</span>
+            <span className="text-slate-400">[{new Date().toLocaleTimeString()}]</span>{' '}
+            <span className="font-bold text-pink-600">[Vision Agent]</span>{' '}
+            <span className="text-slate-700">{externalLog}</span>
           </div>
         )}
         {isActive && (
-          <div className="mt-2 text-indigo-400 flex items-center gap-2">
-            <span className="animate-pulse">_</span>
+          <div className="mt-2 text-indigo-600 flex items-center gap-2">
+            <span className="animate-pulse font-bold">Processing pipeline variables_</span>
           </div>
         )}
+      </div>
+      
+      {/* Real-time Progress Bar */}
+      <div className="bg-slate-50 border-t border-slate-200 p-3 flex items-center gap-4">
+         <div className="text-xs font-bold text-slate-500 w-12 text-right">{progress}%</div>
+         <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div 
+               className="h-full bg-indigo-500 rounded-full transition-all duration-300 ease-out" 
+               style={{ width: `${progress}%` }}
+            />
+         </div>
+         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            {logs.length} / {totalSteps} engines
+         </div>
       </div>
     </div>
   );

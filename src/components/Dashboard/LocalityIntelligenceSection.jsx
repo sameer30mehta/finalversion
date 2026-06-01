@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 const STATUS_LABEL = {
   completed: 'Live scan completed',
   completed_no_accepted_events: 'Live scan completed — no accepted events',
+  cached_baseline: 'Validated locality baseline',
+  baseline_context: 'Location context retained',
   live_unavailable_cached: 'Live unavailable — cached official + media events shown',
   live_unavailable_no_cached_events: 'No locality events available',
   partial: 'Partial live scan',
@@ -10,6 +12,8 @@ const STATUS_LABEL = {
 const STATUS_TONE = {
   completed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   completed_no_accepted_events: 'bg-slate-50 text-slate-600 border-slate-200',
+  cached_baseline: 'bg-slate-50 text-slate-700 border-slate-200',
+  baseline_context: 'bg-amber-50 text-amber-700 border-amber-200',
   live_unavailable_cached: 'bg-amber-50 text-amber-700 border-amber-200',
   live_unavailable_no_cached_events: 'bg-slate-50 text-slate-600 border-slate-200',
   partial: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -20,7 +24,7 @@ const SOURCE_STATUS_TONE = {
   skipped: 'bg-slate-50 text-slate-600 border-slate-200',
 };
 const TIER_TONE = {
-  official: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  official: 'bg-slate-50 text-slate-700 border-slate-200',
   reputed_media: 'bg-sky-50 text-sky-700 border-sky-200',
   local_media: 'bg-slate-50 text-slate-600 border-slate-200',
 };
@@ -31,7 +35,7 @@ const TIER_LABEL = {
 };
 const CORROBORATION_TONE = {
   official_plus_media: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-  official_only: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  official_only: 'bg-slate-50 text-slate-700 border-slate-200',
   media_corroborated: 'bg-sky-50 text-sky-700 border-sky-200',
   media_only: 'bg-amber-50 text-amber-700 border-amber-200',
   local_media_only: 'bg-slate-50 text-slate-600 border-slate-200',
@@ -62,7 +66,7 @@ const ROUTE_LABEL = {
 };
 const ROUTE_TONE = {
   none: 'bg-slate-50 text-slate-600 border-slate-200',
-  field_officer_review: 'bg-blue-50 text-blue-700 border-blue-200',
+  field_officer_review: 'bg-amber-50 text-amber-700 border-amber-200',
   technical_valuer_inspection: 'bg-amber-50 text-amber-700 border-amber-200',
   legal_review: 'bg-red-50 text-red-700 border-red-200',
   senior_credit_review: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -79,9 +83,13 @@ const fmtSignedPct = (v) => {
   const n = Number(v) * 100;
   return `${n > 0 ? '+' : ''}${n.toFixed(1)}%`;
 };
+const fmtScore = (v, digits = 2) => {
+  if (!Number.isFinite(Number(v))) return 'NA';
+  return Number(v).toFixed(digits);
+};
 
 function isCached(li) {
-  return li?.status === 'live_unavailable_cached';
+  return ['live_unavailable_cached', 'cached_baseline'].includes(li?.status);
 }
 
 const REJECTION_LABEL = {
@@ -93,16 +101,40 @@ const REJECTION_LABEL = {
   other: 'Other',
 };
 
+function RelevanceMeter({ value }) {
+  const score = Math.max(0, Math.min(1, Number(value) || 0));
+  const tone = score >= 0.35 ? 'bg-emerald-500' : score >= 0.12 ? 'bg-amber-500' : 'bg-slate-300';
+  return (
+    <div className="min-w-[120px]">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Valuation relevance</span>
+        <span className="font-mono text-[11px] font-bold text-slate-700">{fmtScore(score, 3)}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${score * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export default function LocalityIntelligenceSection({ localityIntelligence }) {
   const [auditOpen, setAuditOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [expandedEvents, setExpandedEvents] = useState(new Set());
+
+  const toggleEvent = (idx) => {
+    const next = new Set(expandedEvents);
+    if (next.has(idx)) next.delete(idx);
+    else next.add(idx);
+    setExpandedEvents(next);
+  };
 
   if (!localityIntelligence) {
     return (
       <section className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
         <div className="flex items-center gap-2 mb-2">
-          <span aria-hidden="true" className="material-symbols-outlined text-indigo-500 text-[22px]">public</span>
-          <h3 className="text-lg font-bold text-slate-900">Hyperlocal Event Intelligence</h3>
+          <span aria-hidden="true" className="material-symbols-outlined text-slate-500 text-[22px]">public</span>
+          <h3 className="text-lg font-bold text-slate-900">Property-Impact Locality Intelligence</h3>
         </div>
         <p className="text-sm font-semibold text-slate-500">
           Locality intelligence unavailable — backend did not return a payload. Core valuation is unaffected.
@@ -121,6 +153,9 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
   const tierCounts = li.sourceTierCounts || { official: 0, reputed_media: 0, local_media: 0 };
   const corrCounts = li.corroborationCounts || {};
   const watchlist = li.watchlistSignals || [];
+  const baselineOnly = status === 'baseline_context';
+  const propertyImpactEvents = li.propertyImpactEvents ?? accepted.filter((e) => e.valuationImpactEligible).length;
+  const detectedNoImpact = Math.max(0, accepted.length - propertyImpactEvents);
 
   return (
     <section className="space-y-6">
@@ -129,8 +164,8 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span aria-hidden="true" className="material-symbols-outlined text-indigo-500 text-[22px]">public</span>
-              <h3 className="text-lg font-bold text-slate-900">Hyperlocal Event Intelligence</h3>
+              <span aria-hidden="true" className="material-symbols-outlined text-slate-500 text-[22px]">public</span>
+              <h3 className="text-lg font-bold text-slate-900">Property-Impact Locality Intelligence</h3>
               <span className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-500">OPTIONAL</span>
             </div>
             <p className="max-w-3xl text-sm font-medium leading-relaxed text-slate-500">
@@ -147,6 +182,11 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
                 Cached
               </span>
             )}
+            {baselineOnly && (
+              <span className="px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border bg-amber-50 text-amber-700 border-amber-200">
+                Zero event impact
+              </span>
+            )}
             {li.runMode && (
               <span className={`px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border ${
                 li.runMode === 'live' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
@@ -157,7 +197,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
             {li.capPolicy?.band && (
               <span className={`px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border ${
                 li.capPolicy.relaxPositiveCaps
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                  ? 'bg-slate-50 text-slate-700 border-slate-200'
                   : 'bg-slate-50 text-slate-600 border-slate-200'
               }`}>
                 Caps: {li.capPolicy.relaxPositiveCaps ? 'Relaxed' : 'Tight'}
@@ -167,14 +207,52 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
         </div>
       </div>
 
+      {li.note && (
+        <div className={`rounded-xl border px-4 py-3 text-sm font-semibold leading-relaxed ${
+          baselineOnly
+            ? 'border-amber-200 bg-amber-50 text-amber-800'
+            : 'border-slate-100 bg-slate-50/60 text-slate-800'
+        }`}>
+          {li.note}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1fr_1.2fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Event detection</p>
+          <p className="mt-2 text-3xl font-black text-slate-950">{accepted.length}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-500">validated event(s) from whitelisted sources</p>
+        </div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Property impact</p>
+          <p className="mt-2 text-3xl font-black text-emerald-950">{propertyImpactEvents}</p>
+          <p className="mt-1 text-sm font-semibold text-emerald-800">event(s) with plausible valuation channels</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Filtered context</p>
+          <p className="mt-2 text-3xl font-black text-slate-950">{detectedNoImpact}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-500">detected but zero-impact for this collateral</p>
+        </div>
+      </div>
+
       {/* Tier counts + corroboration counts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <details className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">Source quality details</h4>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              {li.eventsFound || 0} scanned / {li.acceptedEvents || 0} accepted / {watchlist.length} watchlist
+            </p>
+          </div>
+          <span className="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180">expand_more</span>
+        </summary>
+      <div className="mt-4 grid grid-cols-1 gap-6 border-t border-slate-100 pt-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
           <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700 mb-3">Sources by tier</h4>
           <div className="grid grid-cols-3 gap-3">
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-              <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">Official</p>
-              <p className="mt-1 text-xl font-bold text-indigo-900">{tierCounts.official || 0}</p>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-700">Official</p>
+              <p className="mt-1 text-xl font-bold text-slate-900">{tierCounts.official || 0}</p>
             </div>
             <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
               <p className="text-xs font-bold uppercase tracking-wider text-sky-700">Reputed Media</p>
@@ -185,7 +263,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
               <p className="mt-1 text-xl font-bold text-slate-700">{tierCounts.local_media || 0}</p>
             </div>
           </div>
-          <p className="mt-3 text-xs font-mono text-slate-500">
+          <p className="mt-3 text-[11px] font-mono text-slate-400 font-medium">
             {li.eventsFound || 0} events scanned · {li.acceptedEvents || 0} accepted · {li.rejectedEvents || 0} rejected · {watchlist.length} on watchlist
           </p>
         </div>
@@ -209,6 +287,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
           </div>
         </div>
       </div>
+      </details>
 
       {/* Decision impact */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
@@ -288,8 +367,8 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
                     </span>
                   </div>
                 </div>
-                <p className="mt-1 text-xs font-mono text-slate-500">
-                  {w.sourceName} · {w.eventType} · confidence {Number(w.confidence || 0).toFixed(2)} · relevance {Number(w.localityRelevance || 0).toFixed(2)}
+                <p className="mt-1 text-[11px] font-mono text-slate-400 font-medium">
+                  {w.sourceName} · {w.eventType} · confidence {Number(w.confidence || 0).toFixed(2)} · valuation relevance {fmtScore(w.valuationRelevanceScore ?? w.localityRelevance, 3)}
                 </p>
               </li>
             ))}
@@ -298,8 +377,15 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
       )}
 
       {/* Sources checked */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
-        <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700 mb-3">Sources checked</h4>
+      <details className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">Sources checked</h4>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{sources.length} source status records</p>
+          </div>
+          <span className="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180">expand_more</span>
+        </summary>
+        <div className="mt-4 border-t border-slate-100 pt-4">
         {sources.length === 0 ? (
           <p className="text-sm font-semibold text-slate-500">No source status reported.</p>
         ) : (
@@ -308,7 +394,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
               <li key={s.sourceName} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-800 truncate">{s.sourceName}</p>
-                  <p className="text-xs font-mono text-slate-500 mt-0.5">
+                  <p className="text-[11px] font-mono text-slate-400 font-medium mt-0.5">
                     {TIER_LABEL[s.sourceTier] || s.sourceTier || '—'} · docs {s.documentsFetched ?? 0}
                     {s.errorMessage ? ` · ${s.errorMessage}` : ''}
                   </p>
@@ -320,7 +406,8 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
             ))}
           </ul>
         )}
-      </div>
+        </div>
+      </details>
 
       {/* Live Scan Diagnostics (compact, default collapsed) */}
       {li.diagnostics && (
@@ -333,7 +420,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
           >
             <span className="flex items-center gap-2">
               <span className="text-sm font-bold uppercase tracking-wider text-slate-700">Live Scan Diagnostics</span>
-              <span className="text-xs font-mono text-slate-500">
+              <span className="text-[11px] font-mono text-slate-400 font-medium">
                 {li.diagnostics.liveDocumentsFetched || 0} fetched · {li.diagnostics.liveDocumentsAccepted || 0} accepted · {li.diagnostics.liveDocumentsRejected || 0} rejected
               </span>
             </span>
@@ -436,82 +523,100 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
             No accepted locality events from whitelisted sources. Core valuation unaffected.
           </p>
         ) : (
-          <ul className="space-y-3">
+          <ul className="rounded-xl border border-slate-200 divide-y divide-slate-100">
             {accepted.map((ev, idx) => {
               const tier = ev.sourceTier || 'official';
               const corr = ev.corroborationStatus || 'official_only';
               const watch = ev.isWatchlist;
+              const isExpanded = expandedEvents.has(idx);
+
               return (
                 <li
                   key={ev.eventId || idx}
-                  className={`rounded-xl border p-4 ${
-                    watch ? 'border-amber-200 bg-amber-50/30' : 'border-slate-200 bg-slate-50'
-                  }`}
+                  className={`${watch ? 'bg-amber-50/30' : 'bg-white'}`}
                 >
-                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-900 break-words">{ev.title || ev.summary || ev.eventType}</p>
-                      {ev.summary && ev.summary !== ev.title && (
-                        <p className="text-xs text-slate-600 mt-1">{ev.summary}</p>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider border ${TIER_TONE[tier]}`}>
-                        {TIER_LABEL[tier]}
-                      </span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider border ${CORROBORATION_TONE[corr]}`}>
-                        {CORROBORATION_LABEL[corr]}
-                      </span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider border ${DIRECTION_TONE[ev.direction] || DIRECTION_TONE.neutral}`}>
+                  <div onClick={() => toggleEvent(idx)} className="cursor-pointer flex items-center justify-between p-3 hover:bg-slate-50 transition-colors">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${DIRECTION_TONE[ev.direction] || DIRECTION_TONE.neutral}`}>
                         {ev.direction}
                       </span>
-                      <span className="px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider border bg-indigo-50 text-indigo-700 border-indigo-200">
-                        {ev.eventType?.replace(/_/g, ' ')}
+                      <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${ev.valuationImpactEligible ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                        {ev.valuationImpactEligible ? 'Impact' : 'No Impact'}
                       </span>
+                      <p className="text-[13px] font-bold text-slate-800 truncate">{ev.title || ev.summary || ev.eventType}</p>
+                    </div>
+                    <div className="flex items-center gap-4 text-[11px] font-mono shrink-0 pl-4">
+                      <span className={(ev.liquidityDelta || 0) < 0 ? 'text-red-700 font-bold' : (ev.liquidityDelta || 0) > 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}>
+                        Liq {fmtSignedPct(ev.liquidityDelta)}
+                      </span>
+                      <span className={(ev.marketabilityDelta || 0) < 0 ? 'text-red-700 font-bold' : (ev.marketabilityDelta || 0) > 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}>
+                        Mkt {fmtSignedPct(ev.marketabilityDelta)}
+                      </span>
+                      <span className={(ev.confidenceDelta || 0) < 0 ? 'text-red-700 font-bold' : (ev.confidenceDelta || 0) > 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}>
+                        Conf {fmtSigned(ev.confidenceDelta, 2)}
+                      </span>
+                      <span className={(ev.timeToLiquidateDeltaPct || 0) > 0 ? 'text-red-700 font-bold' : (ev.timeToLiquidateDeltaPct || 0) < 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}>
+                        TTL {fmtSignedPct(ev.timeToLiquidateDeltaPct)}
+                      </span>
+                      <span className="material-symbols-outlined text-[16px] text-slate-400">{isExpanded ? 'expand_less' : 'expand_more'}</span>
                     </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs font-mono text-slate-600">
-                    <span>severity {Number(ev.severity || 0).toFixed(2)}</span>
-                    <span>conf {Number(ev.confidence || 0).toFixed(2)}</span>
-                    <span>relevance {Number(ev.localityRelevance || 0).toFixed(2)}</span>
-                    <span>days ago {ev.publishedDaysAgo ?? '—'}</span>
-                    <span>corrWt {Number(ev.corroborationWeight || 0).toFixed(2)}</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
-                    <span className={(ev.liquidityDelta || 0) < 0 ? 'text-red-700' : (ev.liquidityDelta || 0) > 0 ? 'text-emerald-700' : 'text-slate-600'}>
-                      liq {fmtSignedPct(ev.liquidityDelta)}
-                    </span>
-                    <span className={(ev.marketabilityDelta || 0) < 0 ? 'text-red-700' : (ev.marketabilityDelta || 0) > 0 ? 'text-emerald-700' : 'text-slate-600'}>
-                      mkt {fmtSignedPct(ev.marketabilityDelta)}
-                    </span>
-                    <span className={(ev.confidenceDelta || 0) < 0 ? 'text-red-700' : (ev.confidenceDelta || 0) > 0 ? 'text-emerald-700' : 'text-slate-600'}>
-                      conf {fmtSigned(ev.confidenceDelta, 3)}
-                    </span>
-                    <span className={(ev.timeToLiquidateDeltaPct || 0) > 0 ? 'text-red-700' : (ev.timeToLiquidateDeltaPct || 0) < 0 ? 'text-emerald-700' : 'text-slate-600'}>
-                      TTL {fmtSignedPct(ev.timeToLiquidateDeltaPct)}
-                    </span>
-                  </div>
-                  {ev.evidence && (
-                    <p className="mt-3 text-xs italic text-slate-600 border-l-2 border-slate-300 pl-3">"{ev.evidence}"</p>
+
+                  {isExpanded && (
+                    <div className="p-4 bg-slate-50/50 border-t border-slate-100">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between mb-3">
+                        <div className="min-w-0">
+                          {ev.summary && ev.summary !== ev.title && (
+                            <p className="text-xs text-slate-700">{ev.summary}</p>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2 shrink-0">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${TIER_TONE[tier]}`}>
+                            {TIER_LABEL[tier]}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${CORROBORATION_TONE[corr]}`}>
+                            {CORROBORATION_LABEL[corr]}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border bg-slate-50 text-slate-700 border-slate-200">
+                            {ev.eventType?.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px] font-mono text-slate-500">
+                        <span>severity {Number(ev.severity || 0).toFixed(2)}</span>
+                        <span>conf {Number(ev.confidence || 0).toFixed(2)}</span>
+                        <span>locality {fmtScore(ev.localityMatchScore ?? ev.localityRelevance, 2)}</span>
+                        <span>distance {ev.distanceToPropertyLabel || (Number.isFinite(Number(ev.distanceToPropertyKm)) ? `${Number(ev.distanceToPropertyKm).toFixed(2)} km` : 'not localized')}</span>
+                        <span>corrWt {Number(ev.corroborationWeight || 0).toFixed(2)}</span>
+                      </div>
+
+                      <div className={`mt-3 rounded-lg border p-3 ${
+                        ev.valuationImpactEligible
+                          ? 'border-emerald-100 bg-white'
+                          : 'border-slate-200 bg-white'
+                      }`}>
+                        <div className="border-l-2 border-slate-200 pl-3">
+                          <p className="text-xs text-slate-600 font-mono italic mb-2">
+                            "{ev.rationale || ev.impactReason || ev.summary || "No specific rationale provided by source."}"
+                          </p>
+                          <div className="flex items-center gap-3">
+                            {ev.sourceUrl ? (
+                              <a href={ev.sourceUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors group">
+                                {ev.sourceName || 'Source'} 
+                                <span className="material-symbols-outlined text-[12px] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">north_east</span>
+                              </a>
+                            ) : (
+                              <span className="text-[11px] font-bold text-slate-700">{ev.sourceName || 'Source'}</span>
+                            )}
+                            {ev.eventType && (
+                              <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-widest">{ev.eventType.replace(/_/g, '_')}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   )}
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-                    <span className="font-mono text-slate-500">
-                      {ev.project ? `${ev.project} · ${ev.projectStatus || 'unknown'}` : ev.projectStatus || ''}
-                    </span>
-                    {ev.sourceUrl && (
-                      <a
-                        href={ev.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="font-bold text-indigo-700 hover:text-indigo-900 transition-colors duration-150"
-                      >
-                        {ev.sourceName} ↗
-                      </a>
-                    )}
-                    {ev.audit?.ruleId && (
-                      <span className="font-mono text-[10px] text-slate-400">{ev.audit.ruleId}</span>
-                    )}
-                  </div>
                 </li>
               );
             })}
@@ -519,8 +624,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
         )}
       </div>
 
-      {/* Audit trail */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm mt-6">
         <button
           type="button"
           onClick={() => setAuditOpen((v) => !v)}
@@ -528,7 +632,7 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
           aria-expanded={auditOpen}
         >
           <span className="text-sm font-bold uppercase tracking-wider text-slate-700">Locality Audit Trail</span>
-          <span className="flex items-center gap-2 text-xs font-mono text-slate-500">
+          <span className="flex items-center gap-2 text-[11px] font-mono text-slate-400 font-medium">
             {(li.auditTrail || []).length} entr{(li.auditTrail || []).length === 1 ? 'y' : 'ies'}
             <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
               {auditOpen ? 'expand_less' : 'expand_more'}
@@ -541,18 +645,18 @@ export default function LocalityIntelligenceSection({ localityIntelligence }) {
               <li key={`${rule.ruleId}-${idx}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <div className="flex items-center justify-between gap-3 mb-1">
                   <p className="text-sm font-bold text-slate-800">{rule.ruleId}</p>
-                  <span className="text-xs font-mono text-slate-500">
+                  <span className="text-[11px] font-mono text-slate-400 font-medium">
                     {rule.source}{rule.sourceTier ? ` · ${rule.sourceTier}` : ''}
                   </span>
                 </div>
                 {rule.corroborationStatus && (
-                  <p className="text-xs font-mono text-slate-500">
+                  <p className="text-[11px] font-mono text-slate-400 font-medium">
                     corroboration: {rule.corroborationStatus}
                   </p>
                 )}
-                <p className="text-xs font-mono text-slate-500">input: {rule.input}</p>
-                {rule.formula && <p className="text-xs font-mono text-slate-500 mt-0.5">formula: {rule.formula}</p>}
-                <p className="text-xs font-mono text-slate-500 mt-0.5">effect: {rule.effect}</p>
+                <p className="text-[11px] font-mono text-slate-400 font-medium">input: {rule.input}</p>
+                {rule.formula && <p className="text-[11px] font-mono text-slate-400 font-medium mt-0.5">formula: {rule.formula}</p>}
+                <p className="text-[11px] font-mono text-slate-400 font-medium mt-0.5">effect: {rule.effect}</p>
                 <p className="text-sm text-slate-700 mt-1">{rule.explanation}</p>
               </li>
             ))}

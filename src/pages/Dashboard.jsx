@@ -1,22 +1,16 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import InputWizard from '../components/InputWizard';
-import PropertyMap from '../components/PropertyMap';
 import AgentTerminal from '../components/AgentTerminal';
 import LandingHub from '../components/LandingHub';
-import XAIBubble from '../components/XAIBubble';
-import Stage1IntakeSection from '../components/Dashboard/Stage1IntakeSection';
-import Stage2VerificationSection from '../components/Dashboard/Stage2VerificationSection';
-import HistoricalReliabilitySection from '../components/Dashboard/HistoricalReliabilitySection';
-import PortfolioRiskSection from '../components/Dashboard/PortfolioRiskSection';
-import AIUnderwriterSummarySection from '../components/Dashboard/AIUnderwriterSummarySection';
-import AuditPackSection from '../components/Dashboard/AuditPackSection';
 import CaseHeader from '../components/Dashboard/CaseHeader';
-import OverviewSection from '../components/Dashboard/OverviewSection';
-import ValuationLiquiditySection from '../components/Dashboard/ValuationLiquiditySection';
 import FinalDecisionStrip from '../components/Dashboard/FinalDecisionStrip';
+import OverviewPanel from '../components/Dashboard/OverviewPanel';
+import VerificationPanel from '../components/Dashboard/VerificationPanel';
+import RiskValuationPanel from '../components/Dashboard/RiskValuationPanel';
+import AuditEvidencePanel from '../components/Dashboard/AuditEvidencePanel';
+import ReportPanel from '../components/Dashboard/ReportPanel';
 import VisualEvidenceSection from '../components/Dashboard/VisualEvidenceSection';
-import LocalityIntelligenceSection from '../components/Dashboard/LocalityIntelligenceSection';
+import DeepIntelligencePanel from '../components/Dashboard/DeepIntelligencePanel';
 import { emptyVisualEvidence } from '../lib/visualEvidenceEngine';
 import { runValuation } from '../lib/valuationEngine';
 import { generateUnderwriterSummary, scanPropertyImage } from '../lib/api';
@@ -129,6 +123,7 @@ const compactLocalityIntelligenceForSummary = (li = {}) => {
     growthSignals: li.growthSignals,
     riskSignals: li.riskSignals,
     neutralSignals: li.neutralSignals,
+    propertyImpactEvents: li.propertyImpactEvents,
     sourceTierCounts: li.sourceTierCounts,
     corroborationCounts: li.corroborationCounts,
     watchlistCount: (li.watchlistSignals || []).length,
@@ -148,6 +143,9 @@ const compactLocalityIntelligenceForSummary = (li = {}) => {
       severity: e.severity,
       confidence: e.confidence,
       localityRelevance: e.localityRelevance,
+      valuationRelevanceScore: e.valuationRelevanceScore,
+      valuationImpactEligible: !!e.valuationImpactEligible,
+      impactReason: e.impactReason,
       isWatchlist: !!e.isWatchlist,
       summary: (e.summary || e.title || '').slice(0, 180),
     })),
@@ -188,6 +186,7 @@ const buildUnderwriterSummaryPayload = (data) => {
       distressValue: data?.distressValue,
       timeToLiquidateDays: data?.timeToSell,
       confidenceScore: data?.confidence,
+      liquidityScore: data?.propScore,
     },
     historicalCaseSummary: compactHistoricalForSummary(data?.historicalCaseSummary || {}),
     portfolioRiskSummary: compactPortfolioForSummary(data?.portfolioRiskSummary || {}),
@@ -283,8 +282,11 @@ const buildAuditExportPayload = (data, underwriterSummary) => {
         fallbackUsed: underwriterSummary?.fallbackUsed,
       },
       vision: {
-        source: data?.visualAudit?.source,
-        imageCount: data?.rawImages?.length || 0,
+        source: data?.visualEvidence?.source || data?.visualAudit?.source,
+        imageCount: data?.visualEvidence?.quality?.usableImageCount || data?.rawImages?.length || 0,
+        packetStatus: data?.visualEvidence?.packetStatus,
+        metadataTrust: data?.visualEvidence?.metadataTrust,
+        deterministicEffects: data?.visualEvidence?.deterministicEffects,
       },
     },
     deterministicBoundary: 'Numeric scores, value estimates, LTV adjustments, and risk flags are deterministic. AI only explains computed outputs and recommends evidence.',
@@ -310,8 +312,6 @@ const downloadJsonFile = (filename, payload) => {
 };
 
 export default function Dashboard() {
-  const [searchParams] = useSearchParams();
-  const isDemo = searchParams.get('demo') === 'true';
   
   const [showWizard, setShowWizard] = useState(false);
   const [currentData, setCurrentData] = useState(null); 
@@ -331,6 +331,7 @@ export default function Dashboard() {
     enhancedSummaryCommitted: false,
     visibleSummarySource: null
   });
+  const underwriterSummaryRequestKeyRef = useRef(null);
   const underwriterSummarySequenceRef = useRef(0);
 
   // Modal & Notification States
@@ -344,7 +345,7 @@ export default function Dashboard() {
   const [showImpactFactors, setShowImpactFactors] = useState(true);
   
   // Dashboard Tabs State
-  const [activeTab, setActiveTab] = useState('summary');
+  const [activeTab, setActiveTab] = useState('overview');
 
   // Optional Visual Collateral Evidence — state is lifted here so the pre-
   // evaluation step (overlay between wizard and AgentTerminal) and the
@@ -361,6 +362,9 @@ export default function Dashboard() {
   const [modelUsed, setModelUsed] = useState('none');
   const [visualEvidence, setVisualEvidence] = useState(() => emptyVisualEvidence());
   const [showEvidenceStep, setShowEvidenceStep] = useState(false);
+  const [isProcessingEvidence, setIsProcessingEvidence] = useState(false);
+  const [isEvidenceSectionBusy, setIsEvidenceSectionBusy] = useState(false);
+  const visualEvidenceProcessorRef = useRef(null);
 
   // True CUDA Vision Backend State
   const [detectedBoxes, setDetectedBoxes] = useState({});
@@ -403,6 +407,7 @@ export default function Dashboard() {
       if (underwriterSummaryRequestRef.current.enhancementTimerId) {
         window.clearTimeout(underwriterSummaryRequestRef.current.enhancementTimerId);
       }
+      underwriterSummaryRequestKeyRef.current = null;
       setUnderwriterSummary(null);
       setIsUnderwriterSummaryLoading(false);
       setUnderwriterSummaryEnhancement({ status: 'idle', message: '' });
@@ -419,6 +424,10 @@ export default function Dashboard() {
     }
 
     const requestKey = getUnderwriterSummaryRequestKey(currentData);
+    if (underwriterSummaryRequestKeyRef.current === requestKey) {
+      return;
+    }
+    underwriterSummaryRequestKeyRef.current = requestKey;
     const summaryPayload = buildUnderwriterSummaryPayload(augmentedData || currentData);
     const requestSequence = underwriterSummarySequenceRef.current + 1;
     underwriterSummarySequenceRef.current = requestSequence;
@@ -472,7 +481,6 @@ export default function Dashboard() {
               status: 'upgraded',
               message: 'Enhanced summary replaced the fast summary.'
             });
-            showToast(`AI summary upgraded with ${normalizedEnhanced.modelUsed || 'qwen2.5:7b'}.`, 'success');
             return;
           }
 
@@ -483,19 +491,16 @@ export default function Dashboard() {
               status: 'unavailable',
               message: 'Enhanced model unavailable; fast summary retained.'
             });
-            showToast('Fast AI summary retained. Enhanced model was unavailable.', 'info');
           } else if (currentSummarySource === 'rule_based_fallback') {
             setUnderwriterSummaryEnhancement({
               status: 'unavailable',
               message: 'Enhanced model unavailable; rule-based fallback retained.'
             });
-            showToast('Fallback AI summary retained. Enhanced model was unavailable.', 'info');
           } else {
             setUnderwriterSummaryEnhancement({
               status: 'unavailable',
               message: 'Enhanced model unavailable while the fast summary is still loading.'
             });
-            showToast('Enhanced model was unavailable while the fast summary was still loading.', 'info');
           }
         })
         .catch((error) => {
@@ -507,19 +512,16 @@ export default function Dashboard() {
               status: 'unavailable',
               message: 'Enhanced model unavailable; fast summary retained.'
             });
-            showToast('Fast AI summary retained. Enhanced model was unavailable.', 'info');
           } else if (currentSummarySource === 'rule_based_fallback') {
             setUnderwriterSummaryEnhancement({
               status: 'unavailable',
               message: 'Enhanced model unavailable; rule-based fallback retained.'
             });
-            showToast('Fallback AI summary retained. Enhanced model was unavailable.', 'info');
           } else {
             setUnderwriterSummaryEnhancement({
               status: 'unavailable',
               message: 'Enhanced model unavailable while the fast summary is still loading.'
             });
-            showToast('Enhanced model was unavailable while the fast summary was still loading.', 'info');
           }
         })
         .finally(() => {
@@ -571,9 +573,9 @@ export default function Dashboard() {
         setIsUnderwriterSummaryLoading(false);
 
         if (fastResponse.source === 'rule_based_fallback') {
-          showToast('AI summary is available in fallback form. Enhanced model will be attempted next.', 'info');
+          // Toast removed per user request
         } else if (fastResponse.summary) {
-          showToast('Fast AI underwriter summary is ready in the AI Brief tab.', 'info');
+          // Toast removed per user request
         }
 
         if (!fastResponse.upgradeAvailable) {
@@ -641,6 +643,7 @@ export default function Dashboard() {
       enhancedSummaryCommitted: false,
       visibleSummarySource: null
     };
+    underwriterSummaryRequestKeyRef.current = null;
     setUnderwriterSummary(null);
     setIsUnderwriterSummaryLoading(false);
     setUnderwriterSummaryEnhancement({ status: 'idle', message: '' });
@@ -661,21 +664,36 @@ export default function Dashboard() {
     setModelResults([]);
     setModelUsed('none');
     setVisualEvidence(emptyVisualEvidence());
+    visualEvidenceProcessorRef.current = null;
+    setIsProcessingEvidence(false);
+    setIsEvidenceSectionBusy(false);
   };
 
   const handleWizardSubmit = (payload) => {
     setShowWizard(false);
     setPendingPayload(payload);
-    setActiveTab('summary');
+    setActiveTab('overview');
     resetUnderwriterSummary();
     resetVisualEvidenceState();
     // Pause before evaluation: collect optional visual evidence first.
     setShowEvidenceStep(true);
   };
 
-  const handleEvidenceContinue = () => {
-    setShowEvidenceStep(false);
-    setIsLoading(true); // Triggers AgentTerminal + finalizeValuation
+  const registerVisualEvidenceProcessor = useCallback((processor) => {
+    visualEvidenceProcessorRef.current = processor;
+  }, []);
+
+  const handleEvidenceContinue = async () => {
+    if (isProcessingEvidence || isEvidenceSectionBusy) return;
+    setIsProcessingEvidence(true);
+    try {
+      const nextEvidence = await visualEvidenceProcessorRef.current?.();
+      if (nextEvidence) setVisualEvidence(nextEvidence);
+    } finally {
+      setIsProcessingEvidence(false);
+      setShowEvidenceStep(false);
+      setIsLoading(true); // Triggers AgentTerminal + finalizeValuation
+    }
   };
 
   // Augment dashboard data with bounded visual-evidence + locality cross-rule effects.
@@ -683,6 +701,7 @@ export default function Dashboard() {
   const augmentedData = useMemo(() => {
     if (!currentData) return null;
     const visualDelta = visualEvidence?.deterministicEffects?.confidenceDelta || 0;
+    const visualLiquidityDelta = visualEvidence?.deterministicEffects?.liquidityModifierPct || 0;
 
     // Cross-rule — media waterlogging + visual seepage/dampness → technical inspection.
     const li = currentData.localityIntelligence;
@@ -700,6 +719,10 @@ export default function Dashboard() {
       0.25,
       Math.min(0.95, (Number(currentData.confidence) || 0) + visualDelta + crossRuleConfidencePenalty)
     );
+    const effectivePropScore = Math.max(
+      0,
+      Math.min(100, Math.round((Number(currentData.propScore) || 0) * (1 + visualLiquidityDelta)))
+    );
 
     const crossRuleAudit = crossRuleFired ? {
       ruleId: 'NEWS_VISUAL_CROSS_WATER_001',
@@ -713,6 +736,11 @@ export default function Dashboard() {
       ...currentData,
       visualEvidence,
       confidence: effectiveConfidence,
+      propScore: effectivePropScore,
+      propScoreBreakdown: {
+        base: Number(currentData.propScore) || 0,
+        visualEvidenceModifierPct: visualLiquidityDelta,
+      },
       confidenceBreakdown: {
         ...(currentData.confidenceBreakdown || {}),
         visualEvidenceDelta: visualDelta,
@@ -740,8 +768,8 @@ export default function Dashboard() {
       
       setDetectedBoxes(visionDetections);
       setCurrentData(results);
-      setActiveTab('summary');
-      setFieldDataIncluded(payloadHasImages(pendingPayload));
+      setActiveTab('overview');
+      setFieldDataIncluded(payloadHasImages(pendingPayload) || Object.keys(packet).length > 0);
     } catch (error) {
       console.error("Valuation Engine Error:", error);
       showToast("Valuation Engine crashed. Check console.", "error");
@@ -762,7 +790,7 @@ export default function Dashboard() {
       return;
     }
 
-    const payload = buildAuditExportPayload(currentData, underwriterSummary);
+    const payload = buildAuditExportPayload(augmentedData || currentData, underwriterSummary);
     const slug = String(currentData.caseDetails?.address || 'propscore-case')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -772,9 +800,6 @@ export default function Dashboard() {
     showToast('Audit pack exported as JSON.', 'success');
   };
 
-  const calculateGaugeOffset = (score) => {
-    return 251 - (251 * (score / 100));
-  };
 
   const defaultExterior = "https://lh3.googleusercontent.com/aida-public/AB6AXuA1SApb750yQYbJtFHGRemWz--sEHdPwXTJr5nCpIK_cj6gKGKzRn7EHOVIynJu4gnSDq3IfgclBa-N1AYzotN_OSVnwAMma4ujpHUh6PDPe4gjWQb1MEx6gqZO4FW9Cc4WbRilA3v-rJq5JTdcCROu0y0vwZ9T6VLnU2AdSpJgX6OYZvhkgiGbtEJk51NG3_cjrWA3MU8R7JuotoyBjEjvq3_eLylkq3rv5ADbknUoRfFLNcsDjsC8P5DIRtZ9vF9z7kS7WAEPJTPv";
   const defaultLiving = "https://lh3.googleusercontent.com/aida-public/AB6AXuAjHoqaV86y19B2s3MLps2eYeM0bz5984kIaOpdLw4IvBDkDC8Ucna9rdaBgoijAwlZ5kTqU9WvU7ecUmTQixJG5IX2Ncnw2hgvZEcPBoaGf5HFE9G-_1eZ9ECF1U-5fRH_ko2gUVuoM5rwvH-GAfGTFJK--P42SyYdTSpkPZvoHuPiORe_F3HWI7JR5sWskKEZvjvPQugYLrLTFVp5ZcIUS5O7e8D5iykxzpKmWx54odKLNg2B7C3ih1NSaXzDKzI-EDBmlCcVqAU6";
@@ -792,8 +817,8 @@ export default function Dashboard() {
     <div className="flex h-screen overflow-hidden relative">
       {/* Toast Notification Portal */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-[999] px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 transition-all animate-bounce ${
-          toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'error' ? 'bg-red-600' : 'bg-blue-600'
+        <div className={`fixed top-4 right-4 z-[999] px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 transition-all duration-300 ${
+          toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'error' ? 'bg-red-600' : 'bg-slate-700'
         } text-white`}>
           <span className="material-symbols-outlined text-xl">
             {toast.type === 'success' ? 'check_circle' : toast.type === 'error' ? 'error' : 'info'}
@@ -856,46 +881,39 @@ export default function Dashboard() {
 
       {/* Main Content Wrapper */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* TopNavBar */}
-        <header className="z-50 flex w-full items-center justify-between border-b border-slate-200 bg-white px-5 py-4 md:px-8">
+        {/* TopNavBar — clean header without technical pills */}
+        <header className="z-50 flex w-full items-center justify-between border-b border-slate-100 bg-white px-5 py-1 md:px-8">
           <div className="flex items-center gap-5">
             <div>
-              <h1 className="text-xl font-black tracking-tight text-slate-950">PropScore</h1>
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Collateral intelligence</p>
+              <h1 className="text-lg font-black tracking-tight text-slate-950">PropScore</h1>
+              <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Collateral intelligence</p>
             </div>
-            <span className="hidden items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-bold uppercase tracking-widest text-emerald-700 md:flex">
-              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-              Deterministic engines active
+            <span className="hidden items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-emerald-700 md:flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+              Engines active
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <div className="hidden items-center gap-3 text-[12px] font-mono font-semibold uppercase tracking-wider text-slate-500 lg:flex">
-              <span>Local SQLite</span>
-              <span className="h-1 w-1 rounded-full bg-slate-300"></span>
-              <span>FastAPI</span>
-              <span className="h-1 w-1 rounded-full bg-slate-300"></span>
-              <span>Ollama optional</span>
-            </div>
             <button
               onClick={() => setShowWizard(true)}
-              className="flex items-center gap-2 rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
+              className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1 text-sm font-bold text-white shadow-sm transition-colors hover:bg-indigo-700"
             >
-              <span className="material-symbols-outlined text-[18px]">add</span>
+              <span className="material-symbols-outlined text-[16px]">add</span>
               New Case
             </button>
             <button
               onClick={handleExportAuditPack}
               disabled={!currentData}
-              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
             >
-              <span className="material-symbols-outlined text-[18px]">download</span>
+              <span className="material-symbols-outlined text-[16px]">download</span>
               Audit Pack
             </button>
           </div>
         </header>
 
         {/* Scrollable Content */}
-        <main className="flex-1 overflow-y-auto p-5 pb-32 transition-opacity duration-300 relative md:p-8">
+        <main className={`flex-1 overflow-y-auto transition-opacity duration-300 relative ${(!currentData && !isLoading) ? '' : 'px-3 pb-4 md:px-4 md:pb-4'}`}>
 
           {/* Step 2: Visual Evidence (between wizard and AgentTerminal) */}
           {showEvidenceStep && pendingPayload && (
@@ -906,17 +924,20 @@ export default function Dashboard() {
                     <p className="text-xs font-mono font-semibold uppercase tracking-wider text-indigo-600">Step 2 of 2 · Optional</p>
                     <h2 className="text-lg font-bold text-slate-900">Visual Collateral Evidence</h2>
                     <p className="text-sm text-slate-500 max-w-3xl">
-                      Upload the standardized image packet now and run the optional vision scan, or continue without — image impact will be zero.
-                      You can also add or change evidence later from the Visual Evidence tab.
+                      Add field images by category. PropScore reads timestamp, GPS, and quality metadata from each file, then analyzes the completed packet automatically when you proceed.
+                      You can continue without evidence or revise it later from Verification.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={handleEvidenceContinue}
-                    className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition-colors duration-150 hover:bg-slate-800"
+                    disabled={isProcessingEvidence || isEvidenceSectionBusy}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition-colors duration-150 hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
                   >
-                    Continue to evaluation
-                    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                    {isProcessingEvidence ? 'Processing evidence...' : isEvidenceSectionBusy ? 'Reading image metadata...' : 'Proceed to evaluation'}
+                    <span aria-hidden="true" className={`material-symbols-outlined text-[18px] ${isProcessingEvidence || isEvidenceSectionBusy ? 'animate-spin' : ''}`}>
+                      {isProcessingEvidence || isEvidenceSectionBusy ? 'progress_activity' : 'arrow_forward'}
+                    </span>
                   </button>
                 </div>
               </header>
@@ -934,6 +955,9 @@ export default function Dashboard() {
                     modelUsed={modelUsed}
                     setModelUsed={setModelUsed}
                     onChange={setVisualEvidence}
+                    propertyCoordinates={getPayloadCoordinates(pendingPayload)}
+                    onRegisterProcessor={registerVisualEvidenceProcessor}
+                    onBusyChange={setIsEvidenceSectionBusy}
                   />
                 </div>
               </div>
@@ -951,10 +975,8 @@ export default function Dashboard() {
               <AgentTerminal 
               isActive={isLoading} 
               locationName={getPayloadAddress(pendingPayload).split(',')[0]} 
-              hasImages={payloadHasImages(pendingPayload)}
-              externalLog={visionStatus.startsWith('Downloading') ? visionStatus : null}
-              blockComplete={visionStatus.startsWith('Downloading')}
-              onComplete={finalizeValuation} 
+              hasImages={payloadHasImages(pendingPayload) || Object.keys(packet).length > 0}
+               onComplete={finalizeValuation} 
             />
               </div>
             </div>
@@ -963,112 +985,56 @@ export default function Dashboard() {
           {!currentData && !isLoading ? (
              <LandingHub onInitialize={() => setShowWizard(true)} />
           ) : (
-             currentData && (
-              <div className={`max-w-7xl mx-auto space-y-6 ${isLoading ? 'opacity-0 scale-95 transition-all' : 'opacity-100 scale-100 transition-all duration-500'}`}>
-                <CaseHeader
-                  data={augmentedData}
-                  aiStatus={
-                    isUnderwriterSummaryLoading
-                      ? 'Generating'
-                      : underwriterSummaryEnhancement.status === 'enhancing'
-                        ? 'Enhancing'
-                        : underwriterSummary?.summaryQuality || 'Pending'
-                  }
-                />
+              currentData && (
+
+              <div className={`max-w-7xl mx-auto pt-3 md:pt-4 flex flex-col gap-0 ${isLoading ? 'opacity-0 scale-95 transition-all' : 'opacity-100 scale-100 transition-all duration-500'}`}>
+                <CaseHeader data={augmentedData} />
                 
-                {/* Clean Tab Navigation */}
-                <div className="sticky top-0 z-30 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur">
-                  <div className="flex gap-1.5 overflow-x-auto">
+                {/* Workflow Navigation */}
+                <div className="sticky top-2 z-30 mb-6 bg-white shadow-md overflow-x-auto rounded-xl flex flex-row ps-nav">
                   {[
-                    { id: 'summary', label: 'Overview', icon: 'monitoring' },
-                    { id: 'intake', label: 'Stage 1 Buckets', icon: 'rule_settings' },
-                    { id: 'verification', label: 'Stage 2 Verification', icon: 'fact_check' },
-                    { id: 'valuation', label: 'Valuation', icon: 'payments' },
-                    { id: 'history', label: 'Historical Cases', icon: 'history' },
-                    { id: 'portfolio', label: 'Portfolio Risk', icon: 'account_balance' },
-                    { id: 'audit', label: 'Audit Pack', icon: 'fact_check' },
-                    {
-                      id: 'ai',
-                      label: 'AI Brief',
-                      icon: 'psychology',
-                      status: isUnderwriterSummaryLoading
-                        ? 'Fast'
-                        : underwriterSummaryEnhancement.status === 'scheduled'
-                          ? 'Queued'
-                        : underwriterSummaryEnhancement.status === 'enhancing'
-                          ? 'Enhancing'
-                          : underwriterSummaryEnhancement.status === 'upgraded'
-                            ? 'Enhanced'
-                            : underwriterSummary?.summary
-                              ? 'Ready'
-                              : null
-                    },
-                    { id: 'analysis', label: 'Visual Evidence', icon: 'camera_enhance' },
-                    { id: 'locality_events', label: 'Locality Events', icon: 'public' },
-                    { id: 'location', label: 'Map Intelligence', icon: 'public' }
+                    { id: 'overview',     label: 'Overview',          icon: 'monitoring' },
+                    { id: 'intelligence', label: 'Deep Intelligence', icon: 'radar' },
+                    { id: 'verification', label: 'Verification',      icon: 'verified_user' },
+                    { id: 'risk',         label: 'Risk & Valuation',  icon: 'account_balance' },
+                    { id: 'audit',        label: 'Audit & Evidence',  icon: 'description' },
+                    { id: 'report',       label: 'Report PDF',        icon: 'picture_as_pdf' },
                   ].map(tab => (
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`px-3 py-2 text-sm font-bold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 ${
-                        activeTab === tab.id 
-                          ? 'text-white bg-slate-950 border border-slate-950 shadow-sm' 
-                          : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                      className={`flex items-center gap-2 px-4 py-3 text-sm font-bold tracking-wide transition-colors whitespace-nowrap ${
+                        activeTab === tab.id
+                          ? 'text-indigo-700 border-b-2 border-indigo-600'
+                          : 'text-slate-500 hover:text-slate-700'
                       }`}
                     >
                       <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
                       {tab.label}
-                      {tab.status && (
-                        <span className="ml-1 px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 text-xs font-black uppercase tracking-widest">
-                          {tab.status}
-                        </span>
-                      )}
                     </button>
                   ))}
-                  </div>
                 </div>
 
-                {activeTab === 'summary' && (
-                  <OverviewSection
-                    data={augmentedData}
+                {activeTab === 'overview' && (
+                  <OverviewPanel 
+                    data={augmentedData} 
                     underwriterSummary={underwriterSummary}
                     isUnderwriterSummaryLoading={isUnderwriterSummaryLoading}
+                    coordinates={currentData.coordinates}
+                    showCircleRate={showCircleRate}
+                    setShowCircleRate={setShowCircleRate}
+                    showMetro={showMetro}
+                    setShowMetro={setShowMetro}
+                    showFlood={showFlood}
+                    showImpactFactors={showImpactFactors}
+                    setShowImpactFactors={setShowImpactFactors}
+                    hyperlocalPOIs={currentData.hyperlocalContext?.pois || []}
                   />
                 )}
 
-                {activeTab === 'intake' && <Stage1IntakeSection stage1={currentData.stage1} />}
-
-                {activeTab === 'verification' && <Stage2VerificationSection stage2Output={currentData.stage2Output} />}
-
-                {activeTab === 'valuation' && <ValuationLiquiditySection data={augmentedData} />}
-
-                {activeTab === 'history' && <HistoricalReliabilitySection historicalCaseSummary={currentData.historicalCaseSummary} />}
-
-                {activeTab === 'portfolio' && <PortfolioRiskSection portfolioRiskSummary={currentData.portfolioRiskSummary} />}
-
-                {activeTab === 'audit' && (
-                  <AuditPackSection
+                {activeTab === 'intelligence' && (
+                  <DeepIntelligencePanel
                     data={augmentedData}
-                    underwriterSummary={underwriterSummary}
-                  />
-                )}
-
-                {activeTab === 'ai' && (
-                  <AIUnderwriterSummarySection
-                    summaryResponse={underwriterSummary}
-                    isLoading={isUnderwriterSummaryLoading}
-                    enhancementState={underwriterSummaryEnhancement}
-                  />
-                )}
-
-                {/* Hyperlocal Event Intelligence */}
-                {activeTab === 'locality_events' && (
-                  <LocalityIntelligenceSection localityIntelligence={augmentedData?.localityIntelligence} />
-                )}
-
-                {/* Visual Collateral Evidence (post-evaluation edit) */}
-                {activeTab === 'analysis' && (
-                  <VisualEvidenceSection
                     packet={packet}
                     setPacket={setPacket}
                     packetMetadata={packetMetadata}
@@ -1079,49 +1045,36 @@ export default function Dashboard() {
                     setModelResults={setModelResults}
                     modelUsed={modelUsed}
                     setModelUsed={setModelUsed}
-                    onChange={setVisualEvidence}
+                    onVisualEvidenceChange={setVisualEvidence}
+                    propertyCoordinates={currentData?.coordinates}
+                    underwriterSummary={underwriterSummary}
+                    isUnderwriterSummaryLoading={isUnderwriterSummaryLoading}
+                    underwriterSummaryEnhancement={underwriterSummaryEnhancement}
                   />
                 )}
 
-                {/* Bottom Row: Map */}
-                {activeTab === 'location' && (
-                <div className="bg-white rounded-xl p-6 w-full border border-slate-200 shadow-sm mb-8 relative z-0">
-                   <div className="flex justify-between items-center mb-2">
-                      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                         <span className="material-symbols-outlined text-indigo-500">public</span>
-                         Hyperlocal Map Intelligence
-                         <XAIBubble title="Location Intelligence Engine">
-                           <p>Address is resolved to precise coordinates using the <span className="font-semibold text-slate-800">Komoot Photon</span> geocoder backed by OpenStreetMap data.</p>
-                           <div className="bg-slate-50 rounded-lg p-3 font-mono text-xs text-slate-600 mt-2 space-y-1 border border-slate-100">
-                             <div>Geocoder: <span className="text-indigo-600">Photon (Komoot)</span></div>
-                             <div>Data: <span className="text-indigo-600">OpenStreetMap</span></div>
-                             <div>Proximity: <span className="text-indigo-600">Haversine distance</span></div>
-                           </div>
-                           <p className="mt-3">Infrastructure proximity (metro, highway, commercial hubs) is calculated using Haversine distance formulas. Circle rate zones are interpolated from government registry benchmarks to establish the statutory floor value.</p>
-                         </XAIBubble>
-                      </h3>
-                      <div className="flex flex-wrap justify-end gap-2 max-w-lg">
-                         <button onClick={() => setShowCircleRate(!showCircleRate)} className={`px-3 py-1 text-xs border rounded-full transition-colors font-bold flex items-center gap-1 ${showCircleRate ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                            <span className={`w-2 h-2 rounded-full ${showCircleRate ? 'bg-indigo-500' : 'bg-slate-300'}`}></span> Zone
-                         </button>
-                         <button onClick={() => setShowMetro(!showMetro)} className={`px-3 py-1 text-xs border rounded-full transition-colors font-bold flex items-center gap-1 ${showMetro ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                            <span className={`w-2 h-2 rounded-full ${showMetro ? 'bg-emerald-500' : 'bg-slate-300'}`}></span> Metro
-                         </button>
-                         <button onClick={() => setShowImpactFactors(!showImpactFactors)} className={`px-3 py-1 text-xs border rounded-full transition-colors font-bold flex items-center gap-1 shadow-sm ${showImpactFactors ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                            <span className={`w-2 h-2 rounded-full ${showImpactFactors ? 'bg-indigo-500' : 'bg-slate-300'}`}></span> Collateral Signals
-                         </button>
-                      </div>
-                   </div>
+                {activeTab === 'verification' && (
+                  <VerificationPanel data={augmentedData} />
+                )}
 
-                   <PropertyMap 
-                     center={currentData.coordinates} 
-                     showCircleRate={showCircleRate} 
-                     showMetro={showMetro} 
-                     showFlood={showFlood} 
-                     showImpactFactors={showImpactFactors}
-                     hyperlocalPOIs={currentData.hyperlocalContext?.pois || []}
-                   />
-                </div>
+                {activeTab === 'risk' && (
+                  <RiskValuationPanel data={augmentedData} />
+                )}
+
+                {activeTab === 'audit' && (
+                  <AuditEvidencePanel
+                    data={augmentedData}
+                    underwriterSummary={underwriterSummary}
+                    isUnderwriterSummaryLoading={isUnderwriterSummaryLoading}
+                    enhancementState={underwriterSummaryEnhancement}
+                  />
+                )}
+
+                {activeTab === 'report' && (
+                  <ReportPanel
+                    data={augmentedData}
+                    underwriterSummary={underwriterSummary}
+                  />
                 )}
 
               </div>

@@ -600,21 +600,26 @@ def parse_model_json(response_text: str, payload: Optional[Dict[str, Any]] = Non
     if not isinstance(parsed, dict):
         raise OllamaSummaryError("Model JSON was not an object")
 
-    missing = [field for field in SUMMARY_FIELDS if field not in parsed]
-    if missing:
+    present = [field for field in SUMMARY_FIELDS if field in parsed]
+    if len(present) < 2:
+        missing = [field for field in SUMMARY_FIELDS if field not in parsed]
         raise OllamaSummaryError(f"Model JSON missing fields: {', '.join(missing)}")
+
+    fallback = build_rule_based_fallback(payload or {})
 
     summary: Dict[str, Any] = {}
     for field in SUMMARY_FIELDS:
         value = parsed.get(field)
         if field in {"keyStrengths", "keyRisks", "recommendedEvidence"}:
-            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                raise OllamaSummaryError(f"Model field {field} must be a string array")
-            summary[field] = [item.strip() for item in value if item.strip()]
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                summary[field] = [item.strip() for item in value if item.strip()]
+            else:
+                summary[field] = fallback.get(field, [])
         else:
-            if not isinstance(value, str):
-                raise OllamaSummaryError(f"Model field {field} must be a string")
-            summary[field] = value.strip()
+            if isinstance(value, str) and value.strip():
+                summary[field] = value.strip()
+            else:
+                summary[field] = fallback.get(field, "")
 
     return sanitize_summary(summary, payload or {})
 

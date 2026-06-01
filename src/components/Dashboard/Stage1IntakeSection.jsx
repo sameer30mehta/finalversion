@@ -15,6 +15,11 @@ function formatConfidence(value) {
   return String(value).charAt(0).toUpperCase() + String(value).slice(1);
 }
 
+function formatPrevalence(value) {
+  if (!Number(value)) return displayValue(value);
+  return `${(Number(value) * 100).toFixed(1)}% market share`;
+}
+
 function InfoCell({ label, value }) {
   return (
     <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
@@ -29,7 +34,7 @@ function HelpTip({ text }) {
     <span className="relative inline-flex group">
       <button
         type="button"
-        className="w-5 h-5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-200 text-xs font-bold flex items-center justify-center"
+        className="w-5 h-5 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-600 hover:border-slate-200 text-xs font-bold flex items-center justify-center"
         aria-label={text}
       >
         ?
@@ -46,8 +51,8 @@ function BucketCard({ icon, title, badge, helpText, items }) {
     <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 min-h-[210px]">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-indigo-500 text-[22px]">{icon}</span>
+          <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-slate-500 text-[22px]">{icon}</span>
           </div>
           <div>
             <h4 className="text-sm font-bold text-slate-900">{title}</h4>
@@ -84,10 +89,10 @@ export default function Stage1IntakeSection({ stage1 }) {
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
         <div>
           <h3 className="text-headline-sm font-headline font-bold text-slate-800 flex items-center gap-2">
-            <span className="material-symbols-outlined text-indigo-500">rule_settings</span>
-            Stage 1: Intake & Buckets
+            <span className="material-symbols-outlined text-slate-500">rule_settings</span>
+            Stage 1: Data Normalization & Mapping
           </h3>
-          <p className="text-sm text-slate-500 font-medium mt-1">Normalized profile and SQLite-backed spatial bucket assignment for downstream verification.</p>
+          <p className="text-sm text-slate-500 font-medium mt-1">The raw input is cleaned, standardized, and mapped to specific geographic and market zones in our database.</p>
         </div>
         <div className="flex flex-wrap md:justify-end gap-2">
           <span className={`px-2 py-1 rounded-md text-xs font-bold uppercase tracking-widest border w-max ${
@@ -100,7 +105,7 @@ export default function Stage1IntakeSection({ stage1 }) {
           <span className="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-600 border-slate-200">
             Context source: {sourceLabel}
           </span>
-          <span className="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-widest border w-max bg-indigo-50 text-indigo-700 border-indigo-100">
+          <span className="px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-widest border w-max bg-slate-50 text-slate-700 border-slate-100">
             Location match: {formatConfidence(metadata.locationMatchConfidence)}
           </span>
         </div>
@@ -108,7 +113,7 @@ export default function Stage1IntakeSection({ stage1 }) {
 
       <div className="space-y-6">
         <div>
-          <h4 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">Normalized Property Profile</h4>
+          <h4 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">Standardized Property Details</h4>
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
             <InfoCell label="Address" value={profile.address} />
             <InfoCell label="Coordinates" value={`${profile.lat}, ${profile.lon}`} />
@@ -127,43 +132,43 @@ export default function Stage1IntakeSection({ stage1 }) {
 
         <div>
           <h4 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">
-            Bucket Assignment
-            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded font-mono border border-indigo-100">STAGE_1_CORE</span>
+            Geographic & Market Zone Mapping
+            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 text-xs rounded font-mono border border-indigo-100 font-bold">LOCALITY_DATA</span>
           </h4>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <BucketCard
               icon="map"
-              title="Coarse Bucket"
+              title="City / Regional Zone"
               badge={buckets.coarseBucket?.id}
-              helpText="Broad zone-level context used for circle-rate region, land-use, and regulatory context."
+              helpText="Broad zone-level context used for government values, land-use, and regulatory context."
               items={[
-                { label: 'Label', value: buckets.coarseBucket?.label },
-                { label: 'Circle Rate Zone', value: buckets.coarseBucket?.circleRateZone },
-                { label: 'Land Use', value: buckets.coarseBucket?.broadLandUse },
-                { label: 'Region', value: buckets.coarseBucket?.regulatoryRegion }
+                { label: 'Zone Name', value: buckets.coarseBucket?.label },
+                { label: 'Govt. Value Zone', value: buckets.coarseBucket?.circleRateZone },
+                { label: 'Primary Land Use', value: buckets.coarseBucket?.broadLandUse },
+                { label: 'Regulatory Region', value: buckets.coarseBucket?.regulatoryRegion }
               ]}
             />
             <BucketCard
               icon="hub"
-              title="Micro-Market"
+              title="Neighborhood / Micro-Market"
               badge={buckets.microMarketBucket?.id}
               helpText="Neighborhood-level context used for local size norms, subtype prevalence, price band, and liquidity patterns."
               items={[
-                { label: 'Label', value: buckets.microMarketBucket?.label },
-                { label: 'Subtype Prevalence', value: buckets.microMarketBucket?.subtypePrevalence },
-                { label: 'Common Size Band', value: buckets.microMarketBucket?.commonSizeBand },
-                { label: 'Liquidity Norm', value: buckets.microMarketBucket?.liquidityNorm }
+                { label: 'Neighborhood Name', value: buckets.microMarketBucket?.label },
+                { label: 'Property Type Demand', value: formatPrevalence(buckets.microMarketBucket?.subtypePrevalence) },
+                { label: 'Typical Size', value: buckets.microMarketBucket?.commonSizeBand },
+                { label: 'Market Liquidity', value: buckets.microMarketBucket?.liquidityNorm }
               ]}
             />
             <BucketCard
               icon="near_me"
-              title="Hyperlocal"
+              title="Street-Level / Hyperlocal"
               badge={buckets.hyperlocalContext?.id}
               helpText="Exact nearby context used for access quality, transit proximity, and surrounding infrastructure cues."
               items={[
-                { label: 'Road Access', value: buckets.hyperlocalContext?.roadAccess },
-                { label: 'Nearest Transit', value: buckets.hyperlocalContext?.nearestTransit },
-                { label: 'Infra Proximity', value: buckets.hyperlocalContext?.infraProximity },
+                { label: 'Road Connectivity', value: buckets.hyperlocalContext?.roadAccess },
+                { label: 'Transit Proximity', value: buckets.hyperlocalContext?.nearestTransit },
+                { label: 'Nearby Infrastructure', value: buckets.hyperlocalContext?.infraProximity },
                 { label: 'Access Quality', value: buckets.hyperlocalContext?.accessQuality }
               ]}
             />

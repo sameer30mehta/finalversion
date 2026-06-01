@@ -237,6 +237,7 @@ def ollama_extract(document: Dict[str, Any], locality_context: Dict[str, Any], *
             prompt=prompt,
             timeout_seconds=timeout_seconds,
             request_json_format=True,
+            caller_source="locality-intelligence",
         )
     except OllamaSummaryError as exc:
         logger.warning(f"Ollama event extraction failed: {exc}")

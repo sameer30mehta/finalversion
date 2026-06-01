@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from .property_relevance import VALUATION_RELEVANCE_FLOOR, enrich_property_relevance
+
 # Per-eventType base impact ceilings. The dynamic eventWeight scales each
 # accepted event's effect within these ceilings.
 BASE_IMPACTS: Dict[str, Dict[str, float]] = {
@@ -169,9 +171,7 @@ def project_maturity_weight(project_status: Optional[str], expected_completion_m
 
 def compute_event_weight(event: Dict[str, Any]) -> float:
     source_trust       = float(event.get("sourceTrust") or 0.5)
-    locality_relevance = float(event.get("localityRelevance") or 0.0)
-    confidence         = float(event.get("confidence") or 0.0)
-    severity           = float(event.get("severity") or 0.0)
+    property_relevance = float(event.get("valuationRelevanceScore") or 0.0)
     rw = recency_weight(event.get("publishedDaysAgo"))
     pmw = project_maturity_weight(event.get("projectStatus"), event.get("expectedCompletionMonths"))
     # Corroboration weight multiplies the formula (per brief). Falls back to
@@ -183,7 +183,7 @@ def compute_event_weight(event: Dict[str, Any]) -> float:
         cw = float(cw)
     except Exception:
         cw = 1.0
-    return source_trust * locality_relevance * confidence * severity * rw * pmw * cw
+    return source_trust * property_relevance * rw * pmw * cw
 
 
 def score_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -216,9 +216,14 @@ def score_event(event: Dict[str, Any]) -> Dict[str, Any]:
         })
         return out
 
+    out = enrich_property_relevance(out)
     event_type = out.get("eventType") or "neutral_update"
     base = BASE_IMPACTS.get(event_type, BASE_IMPACTS["neutral_update"])
     direction = out.get("direction") or "neutral"
+    impact_eligible = (
+        bool(out.get("valuationImpactEligible"))
+        and float(out.get("valuationRelevanceScore") or 0.0) >= VALUATION_RELEVANCE_FLOOR
+    )
 
     weight = compute_event_weight(out)
     # Treat absolute magnitude of weight as the scaling factor; the SIGN
@@ -226,7 +231,9 @@ def score_event(event: Dict[str, Any]) -> Dict[str, Any]:
     scale = abs(weight)
     # However, a delayed/stalled positive project inverts: weight is negative.
     # In that case, flip the sign of positive-direction base impacts.
-    if direction == "positive" and weight < 0:
+    if not impact_eligible:
+        scaled = {k: 0.0 for k in base}
+    elif direction == "positive" and weight < 0:
         scaled = {k: -v * scale for k, v in base.items()}
     else:
         scaled = {k: v * scale for k, v in base.items()}
@@ -249,8 +256,14 @@ def score_event(event: Dict[str, Any]) -> Dict[str, Any]:
     out["marketabilityDelta"]       = round(scaled.get("marketability", 0.0), 4)
     out["confidenceDelta"]          = round(scaled.get("confidence", 0.0), 4)
     out["timeToLiquidateDeltaPct"]  = round(scaled.get("ttl", 0.0), 4)
+    out["finalValuationAdjustment"] = {
+        "liquidityDelta": out["liquidityDelta"],
+        "marketabilityDelta": out["marketabilityDelta"],
+        "confidenceDelta": out["confidenceDelta"],
+        "timeToLiquidateDeltaPct": out["timeToLiquidateDeltaPct"],
+    }
 
-    is_negative = (
+    is_negative = impact_eligible and (
         out["liquidityDelta"] < 0
         or out["confidenceDelta"] < 0
         or out["timeToLiquidateDeltaPct"] > 0
@@ -278,7 +291,9 @@ def score_event(event: Dict[str, Any]) -> Dict[str, Any]:
     out["inspectionRoute"] = INSPECTION_ROUTE.get(event_type, "none") if out["manualReviewRequired"] else "none"
 
     # Audit ruleId encodes the corroboration/tier so the trail is self-describing.
-    if is_watchlist:
+    if not impact_eligible:
+        rule_id = "NEWS_DETECTED_NO_PROPERTY_IMPACT_" + event_type.upper()
+    elif is_watchlist:
         rule_id = "NEWS_MEDIA_WATCH_" + event_type.upper()
     elif corroboration_status == "media_corroborated":
         rule_id = "NEWS_CORR_MEDIA_" + event_type.upper()
@@ -294,27 +309,38 @@ def score_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "corroborationStatus": corroboration_status,
         "input": (
             f"{event_type}, severity={out.get('severity')}, confidence={out.get('confidence')}, "
-            f"localityRelevance={out.get('localityRelevance')}, "
+            f"localityMatchScore={out.get('localityMatchScore')}, "
+            f"valuationRelevanceScore={out.get('valuationRelevanceScore')}, "
+            f"distanceToPropertyKm={out.get('distanceToPropertyKm')}, "
             f"projectStatus={out.get('projectStatus')}, "
             f"publishedDaysAgo={out.get('publishedDaysAgo')}, "
             f"corroborationWeight={out.get('corroborationWeight')}"
         ),
         "formula": (
-            "baseImpact × sourceTrust × localityRelevance × confidence × severity "
-            "× recencyWeight × projectMaturityWeight × corroborationWeight"
+            "valuationRelevance = eventSeverity x geographicOverlap x distanceDecay x persistence "
+            "x assetRelevance x confidence; impact = baseImpact x sourceTrust x valuationRelevance "
+            "x recencyWeight x projectMaturityWeight x corroborationWeight"
         ),
         "effect": (
             f"liquidity {out['liquidityDelta']:+.4f}, "
             f"marketability {out['marketabilityDelta']:+.4f}, "
             f"confidence {out['confidenceDelta']:+.4f}, "
             f"TTL {out['timeToLiquidateDeltaPct']*100:+.2f}%"
-            + (" · watchlist" if is_watchlist else "")
+            + f" | valuation relevance {float(out.get('valuationRelevanceScore') or 0):.4f}"
+            + (" | watchlist" if is_watchlist else "")
         ),
         "explanation": (
             f"{event_type.replace('_', ' ').title()} from {out.get('sourceName')} "
             f"({out.get('sourceTier') or 'official'}, {corroboration_status}). "
-            f"Applied bounded {'risk' if is_negative else 'growth'} impact"
-            f"{' — watchlist only, no manual review trigger.' if (is_watchlist and not severe_risk) else '.'}"
+            + (
+                f"Detected event only: {out.get('impactReason')}"
+                if not impact_eligible
+                else (
+                    f"Applied bounded {'risk' if is_negative else 'growth'} impact. "
+                    f"{out.get('impactReason')}"
+                    f"{' Watchlist only, no manual review trigger.' if (is_watchlist and not severe_risk) else ''}"
+                )
+            )
         ),
     }
     return out
@@ -351,6 +377,12 @@ def apply_cache_dampener(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 ev[key] = round(float(ev.get(key) or 0) * mult, 4)
             except (TypeError, ValueError):
                 ev[key] = 0.0
+        ev["finalValuationAdjustment"] = {
+            "liquidityDelta": ev.get("liquidityDelta"),
+            "marketabilityDelta": ev.get("marketabilityDelta"),
+            "confidenceDelta": ev.get("confidenceDelta"),
+            "timeToLiquidateDeltaPct": ev.get("timeToLiquidateDeltaPct"),
+        }
         ev["cacheDampener"] = mult
 
         # Annotate the event's own audit so the trail shows what was dampened
@@ -393,10 +425,14 @@ def aggregate(events: List[Dict[str, Any]], *, relax_positive_caps: bool = False
     risk = 0
     neutral = 0
     watchlist_signals: List[Dict[str, Any]] = []
+    property_impact_events = 0
 
     for ev in events:
         if not ev.get("accepted"):
             continue
+        impact_eligible = bool(ev.get("valuationImpactEligible"))
+        if impact_eligible:
+            property_impact_events += 1
         liquidity     += float(ev.get("liquidityDelta") or 0)
         marketability += float(ev.get("marketabilityDelta") or 0)
         confidence    += float(ev.get("confidenceDelta") or 0)
@@ -404,7 +440,7 @@ def aggregate(events: List[Dict[str, Any]], *, relax_positive_caps: bool = False
         if ev.get("riskFlag"):
             risk_flags.append(ev["riskFlag"])
             risk += 1
-        elif (ev.get("direction") or "neutral") == "positive":
+        elif impact_eligible and (ev.get("direction") or "neutral") == "positive":
             growth += 1
         else:
             neutral += 1
@@ -422,6 +458,8 @@ def aggregate(events: List[Dict[str, Any]], *, relax_positive_caps: bool = False
                 "summary": (ev.get("summary") or ev.get("title") or "")[:200],
                 "confidence": ev.get("confidence"),
                 "localityRelevance": ev.get("localityRelevance"),
+                "valuationRelevanceScore": ev.get("valuationRelevanceScore"),
+                "impactReason": ev.get("impactReason"),
             })
 
     pre_caps = {
@@ -524,6 +562,7 @@ def aggregate(events: List[Dict[str, Any]], *, relax_positive_caps: bool = False
         "riskSignals":              risk,
         "neutralSignals":           neutral,
         "watchlistSignals":         watchlist_signals,
+        "propertyImpactEvents":      property_impact_events,
         "capAudits":                cap_audits,
         "capAudit":                 cap_audit,
     }

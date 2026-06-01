@@ -5,6 +5,7 @@ pydantic-settings
 python-dotenv
 loguru
 requests
+beautifulsoup4
 transformers
 torch
 torchvision

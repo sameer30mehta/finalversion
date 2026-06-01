@@ -1,3 +1,5 @@
+import { summarizePacketMetadata } from './imageMetadata.js';
+
 // Visual Collateral Evidence — deterministic rule engine.
 //
 // PropScore does NOT build the secure capture layer. We consume a standardized
@@ -124,10 +126,11 @@ function computeMetadataTrust(metadata = {}) {
   else score -= 0.05;
 
   if (verification === 'verified_capture') score += 0.15;
+  else if (verification === 'metadata_verified') score += 0.10;
   else if (verification === 'unverified_upload') score -= 0.05;
 
   let freshness = 'unknown';
-  if (freshnessDays !== null) {
+  if (freshnessDays !== null && Number(metadata.embeddedTimestampCount) > 0) {
     if (freshnessDays <= 14) { score += 0.05; freshness = 'fresh'; }
     else if (freshnessDays > 90) { score -= 0.10; freshness = 'stale'; }
     else freshness = 'fresh';
@@ -145,6 +148,12 @@ function computeMetadataTrust(metadata = {}) {
     freshnessStatus: freshness,
     captureVerificationStatus: verification,
     metadataTrustScore: Number(score.toFixed(2)),
+    capturedAt: metadata.capturedAt || null,
+    freshnessDays,
+    imageCount: Number(metadata.imageCount) || 0,
+    verifiedImageCount: Number(metadata.verifiedImageCount) || 0,
+    embeddedGpsCount: Number(metadata.embeddedGpsCount) || 0,
+    embeddedTimestampCount: Number(metadata.embeddedTimestampCount) || 0,
   };
 }
 
@@ -154,11 +163,19 @@ function evaluateImageQuality(packet) {
   let goodCount = 0;
   let mediumCount = 0;
   let poorCount = 0;
+  let totalPixels = 0;
+  let resolutionCount = 0;
   for (const entry of entries) {
     const q = String(entry?.metadata?.qualityStatus || 'unknown').toLowerCase();
     if (q === 'good') goodCount++;
     else if (q === 'medium') mediumCount++;
     else if (q === 'poor') poorCount++;
+    const width = Number(entry?.metadata?.width);
+    const height = Number(entry?.metadata?.height);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      totalPixels += width * height;
+      resolutionCount++;
+    }
   }
   let qualityScore = 0.6;
   if (usableImageCount > 0) {
@@ -171,7 +188,7 @@ function evaluateImageQuality(packet) {
   return {
     overallQualityScore: Number(qualityScore.toFixed(2)),
     usableImageCount,
-    averageResolution: 'unknown',
+    averageResolution: resolutionCount > 0 ? `${(totalPixels / resolutionCount / 1000000).toFixed(1)} MP` : 'unknown',
     qualityFlags: poorCount > 0 ? ['poor_quality_image'] : [],
   };
 }
@@ -192,6 +209,12 @@ export function emptyVisualEvidence() {
       freshnessStatus: 'unknown',
       captureVerificationStatus: 'unknown',
       metadataTrustScore: 0,
+      capturedAt: null,
+      freshnessDays: null,
+      imageCount: 0,
+      verifiedImageCount: 0,
+      embeddedGpsCount: 0,
+      embeddedTimestampCount: 0,
     },
     quality: {
       overallQualityScore: 0,
@@ -255,15 +278,12 @@ export function buildVisualEvidence({
     .map((c) => c.id);
   const packetComplete = missingCategories.length === 0;
 
-  // Use the strongest per-image metadata available (gps=pass beats anything else).
-  let bestMeta = { ...metadata };
-  for (const cat of [...REQUIRED_CATEGORIES, ...OPTIONAL_CATEGORIES]) {
-    const entry = packet[cat.id];
-    if (!entry?.metadata) continue;
-    const merged = { ...bestMeta, ...entry.metadata };
-    if (merged.gpsMatchStatus === 'pass' && bestMeta.gpsMatchStatus !== 'pass') bestMeta = merged;
-  }
-  const metadataTrust = computeMetadataTrust(bestMeta);
+  // Packet trust is file-derived. A single GPS mismatch wins over matching
+  // images so a mixed-location packet cannot receive a confidence boost.
+  const metadataTrust = computeMetadataTrust({
+    ...metadata,
+    ...summarizePacketMetadata(packet),
+  });
   const quality = evaluateImageQuality(packet);
 
   // IMG_PKT_001 — incomplete packet
@@ -374,21 +394,23 @@ export function buildVisualEvidence({
         });
       } else if (metadataTrust.sourceTrustLevel === 'high') {
         confidenceDelta += 0.05;
+        liquidityModifierPct += 0.02;
         auditTrail.push({
           ruleId: 'IMG_CONF_002',
           ruleName: 'Complete packet + high trust + clean model',
           input: 'complete packet, high metadata trust, no concerns',
-          effect: 'confidenceDelta +0.05',
-          explanation: 'Complete packet with high metadata trust and a clean vision pass; modest confidence boost applied.',
+          effect: 'confidenceDelta +0.05, liquidityModifierPct +0.02',
+          explanation: 'Complete packet with high metadata trust and a clean vision pass; modest confidence and liquidity boosts applied.',
         });
       } else if (metadataTrust.sourceTrustLevel === 'medium') {
         confidenceDelta += 0.03;
+        liquidityModifierPct += 0.01;
         auditTrail.push({
           ruleId: 'IMG_CONF_001',
           ruleName: 'Complete packet + adequate metadata + clean model',
           input: 'complete packet, medium metadata trust, no concerns',
-          effect: 'confidenceDelta +0.03',
-          explanation: 'Complete packet with adequate metadata trust and no damage signals; small confidence boost applied.',
+          effect: 'confidenceDelta +0.03, liquidityModifierPct +0.01',
+          explanation: 'Complete packet with adequate metadata trust and no damage signals; small confidence and liquidity boosts applied.',
         });
       } else {
         auditTrail.push({
@@ -416,6 +438,7 @@ export function buildVisualEvidence({
     if (confidenceDelta > 0) confidenceDelta = 0;
     if (valuationModifierPct > 0) valuationModifierPct = 0;
     if (inspectionRoute === 'none') inspectionRoute = 'field_officer_review';
+    manualInspectionRequired = true;
     if (!auditTrail.some((a) => a.ruleId === 'IMG_META_001')) {
       auditTrail.push({
         ruleId: 'IMG_META_001',

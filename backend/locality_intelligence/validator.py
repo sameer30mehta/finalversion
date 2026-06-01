@@ -89,9 +89,10 @@ def validate_event(
         out["rejectionReason"] = "evidence_not_in_source_text"
         return out
 
-    # 6. localityRelevance threshold
-    if locality_relevance < 0.55:
-        out["rejectionReason"] = f"locality_relevance_below_threshold:{locality_relevance:.2f}"
+    # 6. Event detection only needs a minimal geographic signal. Property-level
+    # valuation impact is decided later by property_relevance.py.
+    if locality_relevance < 0.03:
+        out["rejectionReason"] = f"no_property_geography_signal:{locality_relevance:.2f}"
         return out
 
     # 7. confidence threshold

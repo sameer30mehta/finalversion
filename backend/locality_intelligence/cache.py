@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from backend.db.sqlite import get_connection
+from backend.db.sqlite import get_connection, schema_path
 
 
 # Columns we expect on the cache table beyond the original Phase-1 set.
@@ -45,6 +45,11 @@ def _ensure_extra_columns(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             # Already there or unsupported; safe to ignore.
             pass
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(schema_path().read_text(encoding="utf-8"))
+    _ensure_extra_columns(conn)
 
 
 def _row_to_event(row: sqlite3.Row) -> Dict[str, Any]:
@@ -217,14 +222,14 @@ def get_cached_events_for_micro_market(
         sql += " AND accepted = 1"
     sql += " ORDER BY fetched_at DESC LIMIT 60"
     with get_connection() as conn:
-        _ensure_extra_columns(conn)
+        _ensure_schema(conn)
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_event(r) for r in rows]
 
 
 def cache_has_any_events() -> bool:
     with get_connection() as conn:
-        _ensure_extra_columns(conn)
+        _ensure_schema(conn)
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM locality_event_cache"
         ).fetchone()
@@ -235,7 +240,7 @@ def write_events_batch(events: List[Dict[str, Any]]) -> int:
     if not events:
         return 0
     with get_connection() as conn:
-        _ensure_extra_columns(conn)
+        _ensure_schema(conn)
         for ev in events:
             upsert_event(conn, ev)
         conn.commit()

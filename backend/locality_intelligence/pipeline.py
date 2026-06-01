@@ -19,10 +19,8 @@ from .corroboration import (
     corroboration_counts,
     source_tier_counts,
 )
-from .fetcher import FetchedDocument, fetch_all_sources, fetched_document_to_dict
-from .llm_extractor import extract_event
-from .locality_matcher import build_alias_pool, match_document_to_locality
 from .scoring import aggregate, apply_cache_dampener, score_event
+from .property_relevance import enrich_property_relevance
 from .source_registry import enabled_sources, get_source
 from .validator import validate_event
 
@@ -33,7 +31,7 @@ def _bucket_rejection(reason: Optional[str]) -> str:
     if not reason:
         return "other"
     r = str(reason).lower()
-    if "locality_relevance_below_threshold" in r:
+    if "locality_relevance_below_threshold" in r or "no_property_geography_signal" in r:
         return "weak_locality_relevance"
     if "confidence_below_threshold" in r:
         return "low_confidence"
@@ -162,6 +160,7 @@ def _empty_response(
         "growthSignals": 0,
         "riskSignals": 0,
         "neutralSignals": 0,
+        "propertyImpactEvents": 0,
         "liquidityDelta": 0,
         "marketabilityDelta": 0,
         "confidenceDelta": 0,
@@ -201,6 +200,8 @@ def _document_to_locality_context(
     zone: Optional[str],
     city: Optional[str],
 ):
+    from .locality_matcher import match_document_to_locality
+
     match = match_document_to_locality(
         doc_text,
         locality=locality,
@@ -225,8 +226,13 @@ def _build_event_for_document(
     zone: Optional[str],
     city: Optional[str],
     micro_market_id: Optional[str],
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run matcher → extractor → validator for one document. Returns event or None."""
+    from .fetcher import fetched_document_to_dict
+    from .llm_extractor import extract_event
+
     doc_text = (doc.title or "") + "\n" + (doc.body or "")
     match = _document_to_locality_context(doc_text, locality, aliases, zone, city)
 
@@ -247,6 +253,13 @@ def _build_event_for_document(
     )
     extracted["_matchReason"] = match.matchReason
     extracted["_matchedTerms"] = match.matchedTerms
+    extracted["localityMatchType"] = match.matchType
+    extracted["localityMatchScore"] = match.relevance
+    extracted["geographicOverlap"] = match.geographicOverlap
+    extracted["distanceToPropertyKm"] = match.distanceToPropertyKm
+    extracted["dynamicRadiusKm"] = match.dynamicRadiusKm
+    extracted["radiusProfile"] = match.radiusProfile
+    extracted["genericCityArticle"] = match.genericCityArticle
 
     # Stamp source fields
     extracted.setdefault("sourceName", doc.sourceName)
@@ -269,6 +282,13 @@ def _build_event_for_document(
         source_id=doc.sourceId,
         published_days_ago=published_days_ago,
     )
+    validated = enrich_property_relevance(validated, {
+        "locality": locality,
+        "city": city,
+        "zone": zone,
+        "lat": lat,
+        "lon": lon,
+    })
     return validated
 
 
@@ -278,14 +298,38 @@ def _run_live_pipeline(
     city: Optional[str],
     zone: Optional[str],
     aliases: List[str],
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Execute the full live pipeline. Cache fallback decided by caller."""
+    from .fetcher import fetch_all_sources
+
     documents, source_statuses = fetch_all_sources(max_documents_per_source=5)
 
     events: List[Dict[str, Any]] = []
+
+    # Aggregate documents by source to reduce LLM calls
+    from collections import defaultdict
+    by_source = defaultdict(list)
     for doc in documents:
+        by_source[doc.sourceName].append(doc)
+
+    for source_name, source_docs in by_source.items():
+        if not source_docs: continue
+
+        # Combine texts from the same source
+        combined_title = " | ".join(d.title or "" for d in source_docs)
+        combined_body = "\n\n".join(d.body or "" for d in source_docs)
+
+        rep_doc = source_docs[0]
+        # create a synthetic document for extraction to avoid 1 Ollama call per scraped article
+        import copy
+        agg_doc = copy.copy(rep_doc)
+        agg_doc.title = combined_title[:500]
+        agg_doc.body = combined_body[:5500]
+
         try:
-            ev = _build_event_for_document(doc, locality, aliases, zone, city, micro_market_id)
+            ev = _build_event_for_document(agg_doc, locality, aliases, zone, city, micro_market_id, lat, lon)
             if ev:
                 ev["microMarketId"] = micro_market_id
                 ev["locality"] = locality
@@ -293,7 +337,7 @@ def _run_live_pipeline(
                 ev["zone"] = zone
                 events.append(ev)
         except Exception as exc:
-            logger.warning(f"Event build failed for {doc.url}: {exc}")
+            logger.warning(f"Event build failed for {agg_doc.url}: {exc}")
             continue
 
     # Corroboration runs AFTER validation, BEFORE scoring — so scoring sees the
@@ -351,6 +395,7 @@ def _run_live_pipeline(
         "sourceTierCounts": tier_counts,
         "corroborationCounts": corr_counts,
         "watchlistSignals": summary.get("watchlistSignals", []),
+        "propertyImpactEvents": summary.get("propertyImpactEvents", 0),
         "preCapDeltas": summary.get("preCapDeltas"),
         "capPolicy": summary.get("capPolicy"),
         "cacheDampenerApplied": False,
@@ -370,6 +415,8 @@ def _build_from_cached_events(
     zone: Optional[str],
     source_statuses: List[Dict[str, Any]],
     live_diagnostics: Optional[Dict[str, Any]] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Build response from cached events only — same scoring path, no fetch.
 
@@ -392,6 +439,16 @@ def _build_from_cached_events(
     # an older official event).
     for e in events:
         e.setdefault("accepted", True)
+        e.setdefault("city", city)
+        e.setdefault("zone", zone)
+        e.setdefault("locality", locality)
+        e.update(enrich_property_relevance(e, {
+            "locality": locality,
+            "city": city,
+            "zone": zone,
+            "lat": lat,
+            "lon": lon,
+        }))
     annotate_corroboration(events)
 
     rescored: List[Dict[str, Any]] = [score_event(e) for e in events]
@@ -429,6 +486,7 @@ def _build_from_cached_events(
         "sourceTierCounts": tier_counts,
         "corroborationCounts": corr_counts,
         "watchlistSignals": summary.get("watchlistSignals", []),
+        "propertyImpactEvents": summary.get("propertyImpactEvents", 0),
         "preCapDeltas": summary.get("preCapDeltas"),
         "capPolicy": summary.get("capPolicy"),
         "cacheDampenerApplied": bool(dampener_log),
@@ -478,14 +536,54 @@ async def run_locality_intelligence(
     from backend.config import settings  # local import — avoid module-load order issues
 
     locality = (locality or "").strip()
-    alias_pool = build_alias_pool(locality, aliases)
+    alias_pool: List[str] = []
+
+    # The underwriting screen must not depend on external sites being fast.
+    # Seed and serve the scored cache first when available; live-only markets
+    # still get a short bounded scan below.
+    if settings.ENABLE_LOCALITY_CACHE:
+        try:
+            from .seed import seed_locality_events_if_empty
+
+            await asyncio.to_thread(seed_locality_events_if_empty)
+            cached = await asyncio.to_thread(
+                _build_from_cached_events, locality, micro_market_id, city, zone, [], None, lat, lon
+            )
+            if cached and cached.get("acceptedEvents", 0) > 0:
+                cached["status"] = "cached_baseline"
+                cached["runMode"] = "cache"
+                cached["auditTrail"].append({
+                    "ruleId": "NEWS_CACHE_FIRST_001",
+                    "source": "pipeline",
+                    "input": "validated cached locality events available",
+                    "effect": "served scored locality baseline without blocking on external websites",
+                    "explanation": (
+                        "Validated cached locality events were served immediately so the "
+                        "underwriting flow remains responsive and auditable."
+                    ),
+                })
+                return cached
+        except Exception as exc:
+            logger.warning(f"Cache-first locality baseline unavailable: {exc}", exc_info=True)
 
     result: Optional[Dict[str, Any]] = None
     if settings.ENABLE_LIVE_LOCALITY_SCAN:
         try:
-            result = await asyncio.to_thread(
-                _run_live_pipeline, locality, micro_market_id, city, zone, alias_pool
+            from .locality_matcher import build_alias_pool
+
+            alias_pool = build_alias_pool(locality, aliases)
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _run_live_pipeline, locality, micro_market_id, city, zone, alias_pool, lat, lon
+                ),
+                timeout=max(1, settings.LOCALITY_LIVE_SCAN_TIMEOUT_SECONDS),
             )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Live locality pipeline exceeded {}s; using safe fallback.",
+                settings.LOCALITY_LIVE_SCAN_TIMEOUT_SECONDS,
+            )
+            result = None
         except Exception as exc:
             logger.warning(f"Live locality pipeline crashed: {exc}", exc_info=True)
             result = None
@@ -513,7 +611,7 @@ async def run_locality_intelligence(
             statuses = (result or {}).get("sourceStatuses", [])
             live_diagnostics = (result or {}).get("diagnostics")
             cached = await asyncio.to_thread(
-                _build_from_cached_events, locality, micro_market_id, city, zone, statuses, live_diagnostics
+                _build_from_cached_events, locality, micro_market_id, city, zone, statuses, live_diagnostics, lat, lon
             )
             if cached and cached.get("acceptedEvents", 0) > 0:
                 return cached

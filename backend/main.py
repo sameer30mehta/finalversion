@@ -6,6 +6,8 @@ from typing import List, Optional, Dict, Any, Literal
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 import asyncio
+import copy
+import hashlib
 import uuid
 from datetime import datetime, date
 from loguru import logger
@@ -121,6 +123,8 @@ class UnderwriterSummaryRequest(BaseModel):
     valuation: Dict[str, Any] = Field(default_factory=dict)
     historicalCaseSummary: Dict[str, Any] = Field(default_factory=dict)
     portfolioRiskSummary: Dict[str, Any] = Field(default_factory=dict)
+    visualEvidence: Dict[str, Any] = Field(default_factory=dict)
+    localityIntelligence: Dict[str, Any] = Field(default_factory=dict)
     mode: Literal["fast", "enhanced", "auto"] = "auto"
 
 # ============================================================================
@@ -151,6 +155,65 @@ app.add_middleware(
 )
 
 _rate_limit_windows: dict[str, list[float]] = {}
+_UNDERWRITER_SUMMARY_CACHE: dict[str, Dict[str, Any]] = {}
+_UNDERWRITER_SUMMARY_CACHE_ORDER: list[str] = []
+_UNDERWRITER_SUMMARY_IN_FLIGHT: dict[str, asyncio.Future] = {}
+_UNDERWRITER_SUMMARY_CACHE_LIMIT = 32
+_UNDERWRITER_SUMMARY_STATE_LOCK = asyncio.Lock()
+_UNDERWRITER_SUMMARY_GENERATION_LOCK = asyncio.Lock()
+
+
+def _normalize_underwriter_summary_key_payload(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _build_underwriter_summary_request_key(payload: Dict[str, Any], mode: str) -> str:
+    key_payload = {
+        "mode": str(mode or "auto").strip().lower(),
+        "baseUrl": settings.OLLAMA_BASE_URL,
+        "primaryModel": settings.OLLAMA_MODEL,
+        "fallbackModel": settings.OLLAMA_FALLBACK_MODEL,
+        "fastModel": settings.OLLAMA_FAST_MODEL,
+        "timeoutSeconds": settings.OLLAMA_TIMEOUT_SECONDS,
+        "fastTimeoutSeconds": settings.OLLAMA_FAST_TIMEOUT_SECONDS,
+        "payload": _normalize_underwriter_summary_key_payload(payload),
+    }
+    digest = hashlib.sha256(
+        json.dumps(key_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return digest
+
+
+async def _get_cached_underwriter_summary(request_key: str) -> Optional[Dict[str, Any]]:
+    async with _UNDERWRITER_SUMMARY_STATE_LOCK:
+        cached = _UNDERWRITER_SUMMARY_CACHE.get(request_key)
+        return copy.deepcopy(cached) if cached is not None else None
+
+
+async def _store_underwriter_summary_result(request_key: str, response: Dict[str, Any]) -> None:
+    async with _UNDERWRITER_SUMMARY_STATE_LOCK:
+        _UNDERWRITER_SUMMARY_CACHE[request_key] = copy.deepcopy(response)
+        if request_key in _UNDERWRITER_SUMMARY_CACHE_ORDER:
+            _UNDERWRITER_SUMMARY_CACHE_ORDER.remove(request_key)
+        _UNDERWRITER_SUMMARY_CACHE_ORDER.append(request_key)
+        while len(_UNDERWRITER_SUMMARY_CACHE_ORDER) > _UNDERWRITER_SUMMARY_CACHE_LIMIT:
+            expired_key = _UNDERWRITER_SUMMARY_CACHE_ORDER.pop(0)
+            _UNDERWRITER_SUMMARY_CACHE.pop(expired_key, None)
+
+
+async def _resolve_underwriter_summary_inflight(request_key: str) -> Optional[asyncio.Future]:
+    async with _UNDERWRITER_SUMMARY_STATE_LOCK:
+        return _UNDERWRITER_SUMMARY_IN_FLIGHT.get(request_key)
+
+
+async def _register_underwriter_summary_inflight(request_key: str, future: asyncio.Future) -> None:
+    async with _UNDERWRITER_SUMMARY_STATE_LOCK:
+        _UNDERWRITER_SUMMARY_IN_FLIGHT[request_key] = future
+
+
+async def _clear_underwriter_summary_inflight(request_key: str) -> None:
+    async with _UNDERWRITER_SUMMARY_STATE_LOCK:
+        _UNDERWRITER_SUMMARY_IN_FLIGHT.pop(request_key, None)
 
 
 @app.middleware("http")
@@ -897,11 +960,11 @@ def clamp_float(value: float, minimum: float, maximum: float) -> float:
 
 PORTFOLIO_POLICY_CAPS = {
     "micro_market": 0.15,
-    "property_type": 0.40,
+    "property_type": 0.80,
     "subtype": 0.25,
     "low_liquidity": 0.12,
-    "delinquency": 0.035,
-    "default": 0.02,
+    "delinquency": 0.28,
+    "default": 0.08,
 }
 
 LENS_SEVERITY = {
@@ -1120,7 +1183,7 @@ def build_delinquency_lens(similar_bucket: Dict[str, Any]) -> Dict[str, Any]:
         "delinquencyRate": round(delinquency_rate, 4),
         "defaultRate": round(default_rate, 4),
         "loanCount": loan_count,
-        "explanation": f"Similar bucket delinquency is {delinquency_rate:.1%} and default is {default_rate:.1%}.",
+        "explanation": "Historical performance for this specific asset profile within the micro-market.",
     }
 
 
@@ -1244,6 +1307,7 @@ async def resolve_locality_intelligence(request: LocalityIntelligenceRequest):
             "growthSignals": 0,
             "riskSignals": 0,
             "neutralSignals": 0,
+            "propertyImpactEvents": 0,
             "liquidityDelta": 0,
             "marketabilityDelta": 0,
             "confidenceDelta": 0,
@@ -1282,6 +1346,22 @@ async def generate_llm_underwriter_summary(request: UnderwriterSummaryRequest):
         if hasattr(request, "model_dump")
         else request.dict(exclude={"mode"})
     )
+    request_key = _build_underwriter_summary_request_key(payload, mode)
+
+    cached_response = await _get_cached_underwriter_summary(request_key)
+    if cached_response is not None:
+        logger.info(f"AI underwriter cache hit request_key={request_key}")
+        return cached_response
+
+    existing_future = await _resolve_underwriter_summary_inflight(request_key)
+    if existing_future is not None:
+        logger.info(f"AI underwriter duplicate request joined in-flight execution request_key={request_key}")
+        return copy.deepcopy(await asyncio.shield(existing_future))
+
+    loop = asyncio.get_running_loop()
+    request_future = loop.create_future()
+    await _register_underwriter_summary_inflight(request_key, request_future)
+
     if settings.LLM_DEBUG:
         logger.info(
             "AI underwriter endpoint mode={} payload_bytes={} fast_model={} primary_model={} timeout={}s fast_timeout={}s",
@@ -1293,18 +1373,26 @@ async def generate_llm_underwriter_summary(request: UnderwriterSummaryRequest):
             settings.OLLAMA_FAST_TIMEOUT_SECONDS,
         )
     try:
-        return await asyncio.to_thread(
-            generate_underwriter_summary_response,
-            payload,
-            base_url=settings.OLLAMA_BASE_URL,
-            primary_model=settings.OLLAMA_MODEL,
-            fallback_model=settings.OLLAMA_FALLBACK_MODEL,
-            fast_model=settings.OLLAMA_FAST_MODEL,
-            timeout_seconds=settings.OLLAMA_TIMEOUT_SECONDS,
-            fast_timeout_seconds=settings.OLLAMA_FAST_TIMEOUT_SECONDS,
-            mode=mode,
-            debug_enabled=settings.LLM_DEBUG,
-        )
+        if _UNDERWRITER_SUMMARY_GENERATION_LOCK.locked():
+            logger.info(f"AI underwriter request queued behind active generation request_key={request_key}")
+
+        async with _UNDERWRITER_SUMMARY_GENERATION_LOCK:
+            response = await asyncio.to_thread(
+                generate_underwriter_summary_response,
+                payload,
+                base_url=settings.OLLAMA_BASE_URL,
+                primary_model=settings.OLLAMA_MODEL,
+                fallback_model=settings.OLLAMA_FALLBACK_MODEL,
+                fast_model=settings.OLLAMA_FAST_MODEL,
+                timeout_seconds=settings.OLLAMA_TIMEOUT_SECONDS,
+                fast_timeout_seconds=settings.OLLAMA_FAST_TIMEOUT_SECONDS,
+                mode=mode,
+                debug_enabled=settings.LLM_DEBUG,
+            )
+        await _store_underwriter_summary_result(request_key, response)
+        if not request_future.done():
+            request_future.set_result(copy.deepcopy(response))
+        return response
     except Exception as exc:
         logger.warning(f"AI underwriter summary fallback used: {exc}", exc_info=True)
         if mode == "enhanced":
@@ -1336,19 +1424,15 @@ async def generate_llm_underwriter_summary(request: UnderwriterSummaryRequest):
                 "fastModel": settings.OLLAMA_FAST_MODEL,
                 "timeoutSeconds": settings.OLLAMA_TIMEOUT_SECONDS,
                 "fastTimeoutSeconds": settings.OLLAMA_FAST_TIMEOUT_SECONDS,
-                "attempts": [
-                    {
-                        "model": settings.OLLAMA_MODEL if mode != "fast" else settings.OLLAMA_FAST_MODEL,
-                        "status": "failed",
-                        "error": f"Unexpected summary generation error before attempts completed: {exc}",
-                    }
-                ],
+                "attempts": [],
+                "error": str(exc),
             }
+        await _store_underwriter_summary_result(request_key, response)
+        if not request_future.done():
+            request_future.set_result(copy.deepcopy(response))
         return response
-
-# ============================================================================
-# Main Valuation Endpoint
-# ============================================================================
+    finally:
+        await _clear_underwriter_summary_inflight(request_key)
 
 @app.post("/valuate", response_model=ValuationResponse)
 async def run_valuation(
@@ -1770,6 +1854,20 @@ async def startup_event():
     """Initialize on startup"""
     logger.info("PropScore backend starting up")
     
+    # GPU detection
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info(f"GPU detected: {gpu_name}")
+            logger.info("Selected inference backend: CUDA")
+            logger.info("Model load device: GPU/CUDA")
+        else:
+            logger.warning("No GPU detected unexpectedly. Selected inference backend: CPU")
+            logger.warning("Model load device: CPU")
+    except ImportError:
+        logger.warning("PyTorch not installed. Cannot verify GPU.")
+
     # Create tables
     from backend.database import Base
     Base.metadata.create_all(bind=engine)

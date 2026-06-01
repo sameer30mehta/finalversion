@@ -39,7 +39,6 @@ export default function InputWizard({ onSubmit, onCancel }) {
   const [titleClarity, setTitleClarity] = useState('verified');
   const [occupancy, setOccupancy] = useState('owner');
   const [rentalAmount, setRentalAmount] = useState('');
-  const [images, setImages] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [suggestions, setSuggestions] = useState([]);
@@ -64,8 +63,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
     legalStatus,
     titleClarity,
     occupancy,
-    rentalAmount,
-    images
+    rentalAmount
   };
 
   const normalizedSize = normalizeSizeToSqft(area, areaUnit);
@@ -86,8 +84,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
     legal: { filled: Boolean(legalStatus), mandatory: false, label: 'Legal' },
     title: { filled: Boolean(titleClarity), mandatory: false, label: 'Title' },
     occupancy: { filled: Boolean(occupancy), mandatory: false, label: 'Occupancy' },
-    rental: { filled: Number(rentalAmount) > 0, mandatory: false, label: 'Rental' },
-    images: { filled: images.length > 0, mandatory: false, label: 'Images' }
+    rental: { filled: Number(rentalAmount) > 0, mandatory: false, label: 'Rental' }
   };
   const mandatoryComplete = completenessStatus.mandatoryComplete;
   const completenessScore = Object.values(fieldStatus).filter((field) => field.filled).length / Object.values(fieldStatus).length;
@@ -151,21 +148,6 @@ export default function InputWizard({ onSubmit, onCancel }) {
     setShowDropdown(false);
   };
 
-  const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-
-  const handleFileDrop = async (e) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer ? e.dataTransfer.files : e.target.files);
-    const imageFiles = files.filter((file) => file.type.startsWith('image/')).slice(0, 5);
-    const newImages = await Promise.all(imageFiles.map(readFileAsDataUrl));
-    setImages((prev) => [...prev, ...newImages].slice(0, 5));
-  };
-
   const handleSubmit = async () => {
     if (!mandatoryComplete || isSubmitting) return;
 
@@ -188,25 +170,25 @@ export default function InputWizard({ onSubmit, onCancel }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-4 animate-in fade-in zoom-in duration-300">
       <div className="bg-white rounded-3xl overflow-hidden shadow-2xl flex max-w-4xl w-full h-[620px] border border-slate-200">
-        <div className="w-1/3 bg-gradient-to-br from-slate-900 to-indigo-950 p-8 text-white flex flex-col relative overflow-hidden">
-          <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 bg-indigo-500 rounded-full blur-[80px] opacity-20"></div>
+        <div className="w-1/3 bg-gradient-to-br from-indigo-50 to-cyan-50 p-8 text-slate-900 flex flex-col relative overflow-hidden border-r border-indigo-100">
+          <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 bg-indigo-300 rounded-full blur-[80px] opacity-30"></div>
 
           <h2 className="text-2xl font-headline font-bold mb-2">PropScore Valuator</h2>
-          <p className="text-white/60 text-sm font-body mb-8">Constructing value step-by-step using multiple intelligence engines.</p>
+          <p className="text-slate-500 text-sm font-body mb-8">Constructing value step-by-step using multiple intelligence engines.</p>
 
           <div className="space-y-6 flex-1">
             {[1, 2, 3].map((stepNumber) => (
               <div key={stepNumber} className="flex gap-4 items-start relative z-10">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-colors ${
-                  step === stepNumber ? 'bg-indigo-500 text-white' : step > stepNumber ? 'bg-emerald-500 text-white' : 'bg-white/10 text-white/40'
+                  step === stepNumber ? 'bg-indigo-600 text-white' : step > stepNumber ? 'bg-emerald-500 text-white' : 'bg-white text-slate-400 border border-slate-200'
                 }`}>
                   {step > stepNumber ? <span className="material-symbols-outlined text-sm">check</span> : stepNumber}
                 </div>
                 <div>
-                  <p className={`font-headline font-bold text-sm ${step === stepNumber ? 'text-white' : 'text-white/60'}`}>
+                  <p className={`font-headline font-bold text-sm ${step === stepNumber ? 'text-slate-900' : 'text-slate-500'}`}>
                     {stepNumber === 1 ? 'Location Intelligence' : stepNumber === 2 ? 'Property Details' : 'Data Enrichment'}
                   </p>
-                  <p className="text-white/40 text-xs mt-1 leading-snug">
+                  <p className="text-slate-400 text-xs mt-1 leading-snug">
                     {stepNumber === 1 ? 'Anchor to circle rates and infra grids.' : stepNumber === 2 ? 'Establish structural baseline.' : 'Optional signals to narrow uncertainty.'}
                   </p>
                 </div>
@@ -215,12 +197,12 @@ export default function InputWizard({ onSubmit, onCancel }) {
           </div>
 
           <div className="mt-auto relative z-10">
-            <div className="p-3 bg-white/5 rounded-xl border border-white/10 mb-3">
+            <div className="p-3 bg-white/80 rounded-xl border border-indigo-100 mb-3">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-xs text-white/70 font-bold uppercase tracking-wider">Data Completeness</p>
-                <span className="text-xs font-mono text-indigo-300">{Math.round(completenessScore * 100)}%</span>
+                <p className="text-xs text-slate-600 font-bold uppercase tracking-wider">Data Completeness</p>
+                <span className="text-xs font-mono text-indigo-600">{Math.round(completenessScore * 100)}%</span>
               </div>
-              <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-indigo-400 to-emerald-400 rounded-full transition-all duration-500"
                   style={{ width: `${completenessScore * 100}%` }}
@@ -229,7 +211,7 @@ export default function InputWizard({ onSubmit, onCancel }) {
               <div className="flex flex-wrap gap-1 mt-2">
                 {Object.values(fieldStatus).map((field, idx) => (
                   <span key={idx} className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
-                    field.filled ? 'bg-emerald-500/20 text-emerald-300' : field.mandatory ? 'bg-red-500/20 text-red-300' : 'bg-white/5 text-white/30'
+                    field.filled ? 'bg-emerald-50 text-emerald-700' : field.mandatory ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-400'
                   }`}>
                     {field.filled ? 'OK' : field.mandatory ? '!' : '-'} {field.label}
                   </span>
@@ -237,11 +219,11 @@ export default function InputWizard({ onSubmit, onCancel }) {
               </div>
             </div>
 
-            <div className="p-3 bg-white/5 rounded-xl border border-white/10">
-              <p className="text-xs text-white/80 flex items-center gap-2 font-bold uppercase tracking-wider mb-1">
+            <div className="p-3 bg-white/80 rounded-xl border border-indigo-100">
+              <p className="text-xs text-slate-700 flex items-center gap-2 font-bold uppercase tracking-wider mb-1">
                 <span className="material-symbols-outlined text-[14px] text-amber-400">shield</span> Stage 1 Contract
               </p>
-              <p className="text-xs text-white/60 leading-tight">Required intake is normalized before valuation agents consume the case.</p>
+              <p className="text-xs text-slate-500 leading-tight">Required intake is normalized before valuation agents consume the case.</p>
             </div>
           </div>
         </div>
@@ -482,34 +464,17 @@ export default function InputWizard({ onSubmit, onCancel }) {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Field Verification Scans</label>
-                  <div
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={handleFileDrop}
-                    className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/30 hover:bg-indigo-50 transition-colors rounded-2xl p-6 text-center cursor-pointer relative"
-                  >
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*"
-                      onChange={handleFileDrop}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                      title="Upload photos"
-                    />
-                    <span className="material-symbols-outlined text-indigo-400 text-4xl mb-2">add_photo_alternate</span>
-                    <p className="text-sm font-bold text-slate-700">Drag & Drop or Click to Browse</p>
-                    <p className="text-xs text-slate-500 mt-1">Images unlock Vision AI and raise confidence bounds.</p>
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined text-indigo-500">photo_library</span>
+                    <div>
+                      <p className="text-sm font-bold text-indigo-900">Field images come next</p>
+                      <p className="mt-1 text-xs font-medium leading-relaxed text-indigo-700">
+                        After this intake, upload the categorized evidence packet. PropScore will read capture time, GPS, and quality metadata automatically before scoring.
+                      </p>
+                    </div>
                   </div>
                 </div>
-
-                {images.length > 0 && (
-                  <div className="flex gap-3 overflow-x-auto pb-2">
-                    {images.map((src, idx) => (
-                      <img key={idx} src={src} className="w-16 h-16 rounded-lg object-cover shadow-sm border border-slate-200" alt={`upload-${idx}`} />
-                    ))}
-                  </div>
-                )}
               </div>
             )}
           </div>

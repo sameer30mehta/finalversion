@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     # Hyperlocal Event Intelligence toggles (default ON; safe to flip OFF).
     ENABLE_LIVE_LOCALITY_SCAN: bool = env_bool("ENABLE_LIVE_LOCALITY_SCAN", True)
     ENABLE_LOCALITY_CACHE: bool = env_bool("ENABLE_LOCALITY_CACHE", True)
+    LOCALITY_LIVE_SCAN_TIMEOUT_SECONDS: int = env_int("LOCALITY_LIVE_SCAN_TIMEOUT_SECONDS", 8)
     MAX_REQUEST_BYTES: int = env_int("MAX_REQUEST_BYTES", 6 * 1024 * 1024)
     RATE_LIMIT_PER_MINUTE: int = env_int("RATE_LIMIT_PER_MINUTE", 120)
     

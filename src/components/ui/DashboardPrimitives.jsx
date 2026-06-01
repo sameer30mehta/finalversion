@@ -67,7 +67,7 @@ export function SectionHeader({ icon, title, eyebrow, description, actions }) {
   );
 }
 
-export function MetricCard({ label, value, sublabel, tone = 'slate', icon }) {
+export function MetricCard({ label, value, sublabel, tone = 'slate', icon, formula, tooltipAlign = 'center' }) {
   const toneClass = {
     slate: 'text-slate-900 bg-slate-50 border-slate-200',
     indigo: 'text-indigo-900 bg-indigo-50 border-indigo-100',
@@ -79,7 +79,10 @@ export function MetricCard({ label, value, sublabel, tone = 'slate', icon }) {
   return (
     <div className={`rounded-xl border p-4 ${toneClass}`}>
       <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{label}</p>
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+          {label}
+          {formula && <FormulaTooltip formula={formula} align={tooltipAlign} />}
+        </p>
         {icon && <span className="material-symbols-outlined text-[18px] opacity-70">{icon}</span>}
       </div>
       <p className="break-words text-xl font-bold leading-tight text-current">{cleanText(value)}</p>
@@ -102,6 +105,70 @@ export function EmptyState({ title = 'No data available', description }) {
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm">
       <p className="font-bold text-slate-800">{title}</p>
       {description && <p className="mt-1 font-medium leading-relaxed text-slate-500">{description}</p>}
+    </div>
+  );
+}
+
+export function SubSectionDivider({ label, className = '' }) {
+  return (
+    <div className={`flex items-center gap-3 py-2 ${className}`}>
+      <div className="h-px flex-1 bg-slate-100" />
+      {label && (
+        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+          {label}
+        </span>
+      )}
+      <div className="h-px flex-1 bg-slate-100" />
+    </div>
+  );
+}
+
+export function SummaryStatRow({ items = [] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      {items.map((item) => (
+        <div key={item.label} className="flex items-baseline gap-1.5">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            {item.label}
+          </span>
+          <span className={`text-sm font-extrabold tabular-nums ${item.tone === 'danger' ? 'text-red-700' : item.tone === 'success' ? 'text-emerald-700' : 'text-slate-900'}`}>
+            {cleanText(item.value)}
+          </span>
+          {item.delta && (
+            <span className={`text-[11px] font-bold tabular-nums ${Number(item.delta) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+              {Number(item.delta) > 0 ? '+' : ''}{item.delta}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function FormulaTooltip({ formula, align = 'center' }) {
+  if (!formula) return null;
+
+  const alignClasses = {
+    left: '-left-2',
+    right: '-right-2',
+    center: 'left-1/2 -translate-x-1/2',
+  }[align];
+
+  const caretClasses = {
+    left: 'left-3',
+    right: 'right-3',
+    center: 'left-1/2 -translate-x-1/2',
+  }[align];
+
+  return (
+    <div className="group relative inline-flex items-center justify-center translate-y-[1px]">
+      <span className="material-symbols-outlined text-[13px] text-slate-300 cursor-help hover:text-indigo-500 transition-colors bg-white rounded-full">help</span>
+      <div className={`pointer-events-none absolute bottom-full mb-2 w-max max-w-[280px] opacity-0 shadow-lg transition-all duration-200 group-hover:opacity-100 z-[100] translate-y-1 group-hover:translate-y-0 ${alignClasses}`}>
+        <div className="rounded-lg bg-slate-900 px-3 py-2.5 text-[11px] text-white font-mono leading-relaxed whitespace-pre-wrap text-left shadow-xl border border-slate-700 tracking-wide">
+          {formula}
+        </div>
+        <div className={`absolute -bottom-1 h-2 w-2 rotate-45 bg-slate-900 border-b border-r border-slate-700 ${caretClasses}`}></div>
+      </div>
     </div>
   );
 }

@@ -269,17 +269,16 @@ async function resolveLocationPair(input) {
 }
 
 function fallbackHyperlocalContext(lat, lon) {
-  const seed = Math.abs(Math.floor(lat * 1000 + lon * 1000));
   return {
     pois: [],
     summary: {
-      metroDistance: 600 + (seed % 2600),
-      schoolDistance: 500 + (seed % 1800),
-      hospitalDistance: 800 + (seed % 2400),
-      commercialDistance: 450 + (seed % 1800),
+      metroDistance: null,
+      schoolDistance: null,
+      hospitalDistance: null,
+      commercialDistance: null,
       totalPOIsFound: 0,
       transitCount: 0,
-      amenityScore: 35 + (seed % 35)
+      amenityScore: 0
     }
   };
 }
@@ -287,7 +286,7 @@ function fallbackHyperlocalContext(lat, lon) {
 async function resolveHyperlocalContext(lat, lon) {
   const fallback = fallbackHyperlocalContext(lat, lon);
   try {
-    const result = await withTimeout(extractHyperlocalContext(lat, lon), fallback, 7500);
+    const result = await withTimeout(extractHyperlocalContext(lat, lon), fallback, 30000);
     return result?.summary ? result : fallback;
   } catch (error) {
     console.warn('Stage 1 hyperlocal fallback used:', error);

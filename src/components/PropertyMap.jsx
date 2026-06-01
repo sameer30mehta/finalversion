@@ -80,7 +80,7 @@ export default function PropertyMap({
   ];
 
   return (
-    <div className="w-full h-72 rounded-xl overflow-hidden relative border border-slate-200 shadow-inner z-0">
+    <div className="w-full h-[400px] rounded-xl overflow-hidden relative border border-slate-200 shadow-inner z-0">
       <MapContainer 
         key={center.join(',')}
         center={center} 

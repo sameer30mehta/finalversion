@@ -157,7 +157,8 @@ export const runValuation = async (payload) => {
 
   // 2. BASE VALUE ENGINE (uses coarse bucket circle rate)
   const effectiveCircleRate = coarseBucket.circleRate || inputs.circleRate || 15000;
-  const baseValue = effectiveCircleRate * inputs.propertyDetails.area;
+  const effectiveArea = Number(inputs.propertyDetails.area) || 500;
+  const baseValue = effectiveCircleRate * effectiveArea;
 
   // 3. MARKET ADJUSTMENT ENGINE
   const demandMap = { 'very_high': 0.9, 'high': 0.75, 'moderate': 0.55, 'low': 0.3 };
@@ -328,7 +329,8 @@ export const runValuation = async (payload) => {
     microMarket,
     baseConfidence: confidenceBeforeHistorical
   });
-  confidence = Math.min(0.95, Math.max(0.25, historicalCaseSummary.finalConfidence ?? confidence));
+  const historicalConfidence = historicalCaseSummary.finalConfidence;
+  confidence = Math.min(0.95, Math.max(0.25, Number.isFinite(historicalConfidence) ? historicalConfidence : confidence));
   const estimatedMarketValue = Math.round((marketValueRange[0] + marketValueRange[1]) / 2);
   const portfolioRiskSummary = await resolvePortfolioConcentrationFromBackend({
     microMarketId: stage1?.bucketAssignment?.microMarketBucket?.id || microMarket?.bucketId,
@@ -411,12 +413,3 @@ export const runValuation = async (payload) => {
   };
 };
 
-export const defaultMockInputs = {
-  location: "Andheri East, Mumbai",
-  circleRate: 15000, 
-  cityTier: 1, 
-  demandScore: 0.8,
-  infrastructure: { metroDistance: 400, highwayDistance: 1200, commercialHubDistance: 800, schoolDistance: 600, hospitalDistance: 1500 },
-  propertyDetails: { type: "Apartment", config: "2 BHK", area: 950, age: 12, floor: 3 },
-  enrichment: { legalStatus: "clear", occupancy: "owner", rental: 0, images: { exterior: false, interior: false } }
-};
